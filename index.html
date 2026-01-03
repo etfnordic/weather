@@ -46,6 +46,7 @@
     .bar {
       height: 10px;
       border-radius: 999px;
+      overflow: hidden;
       background: linear-gradient(90deg,
         #2b1b5a 0%,
         #2a4bd7 20%,
@@ -55,7 +56,8 @@
         #ff8c00 82%,
         #e74c3c 100%
       );
-      border: 1px solid rgba(255,255,255,0.18);
+      border: 0;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
     }
 
     .legend-labels {
@@ -64,7 +66,7 @@
       margin-top: 4px;
       opacity: 0.9;
     }
-
+    
     .leaflet-container { background: #0b1220; }
   </style>
 </head>
@@ -78,6 +80,7 @@
     <div class="legend">
       <div class="bar"></div>
       <div class="legend-labels">
+        <div class="muted" id="extremes">Lägst: – • Högst: –</div>
         <span id="legendMin">−25°C</span>
         <span id="legendMax">+25°C</span>
       </div>
