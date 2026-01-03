@@ -83,8 +83,14 @@
   function fmtTime(iso) {
     if (!iso) return "";
     const d = new Date(iso);
-    return isNaN(d) ? iso : d.toLocaleString("sv-SE");
+    if (isNaN(d)) return iso;
+
+    return d.toLocaleString("sv-SE", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
+
 
   function markerSizeForZoom(z) {
     if (z <= 4) return 18;
@@ -119,7 +125,7 @@
         align-items:center;
         justify-content:center;
         color:#fff;
-        font-weight:800;
+        font-weight:600;
         font-size:${fontSize}px;
         font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
         box-shadow:0 10px 22px rgba(0,0,0,0.28);
