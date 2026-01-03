@@ -95,6 +95,21 @@
       opacity: 0.9;
     }
 
+    .legend-labels-3 {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+.legend-labels-3 span {
+  font-weight: 500;
+  opacity: 0.92;
+}
+
+.legend-labels-3 .legend-mid {
+  text-align: center;
+}
+
     .leaflet-container { background: #0b1220; }
   </style>
 </head>
@@ -108,10 +123,12 @@
     <div class="legend">
       <div class="bar"></div>
 
-      <div class="legend-labels">
+      <div class="legend-labels legend-labels-3">
         <span id="legendMin">−40°C</span>
+        <span class="legend-mid">0°C</span>
         <span id="legendMax">+40°C</span>
       </div>
+
 
       <!-- HÖGST ÖVERST, LÄGST UNDER -->
       <div class="legend-extremes" id="extremes">
