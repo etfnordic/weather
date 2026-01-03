@@ -63,17 +63,18 @@
     .legend-labels {
       display: flex;
       justify-content: space-between;
-      margin-top: -4px;
+      align-items: baseline;
       opacity: 0.92;
       font-weight: 500;
     }
 
-    #extremes {
-      margin-top: -2px;
+    .legend-extremes {
+      display: block;
       font-weight: 400;
       font-size: 14px;
       opacity: 0.88;
-      white-space: nowrap;
+      line-height: 1.3;
+      white-space: normal;
       overflow: hidden;
       text-overflow: ellipsis;
     }
@@ -96,7 +97,7 @@
         <span id="legendMax">+40°C</span>
       </div>
 
-      <div id="extremes">Lägst: – • Högst: –</div>
+      <div class="legend-extremes" id="extremes">Lägst: – • Högst: –</div>
 
       <div class="muted">Klicka på en punkt för stationens namn och tid.</div>
     </div>
