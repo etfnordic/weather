@@ -181,11 +181,11 @@
     }
 
     const newestText = newest
-    ? ` • Senaste mätning: ${newest.toLocaleString("sv-SE", {
-      day: "numeric",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
+      ? ` • Senaste mätning: ${newest.toLocaleString("sv-SE", {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
       })}`
     : "";
 
