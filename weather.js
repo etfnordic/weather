@@ -16,7 +16,8 @@
 
   const layer = L.layerGroup().addTo(map);
   const statusEl = document.getElementById("status");
-
+  const extremesEl = document.getElementById("extremes");
+  
   function clamp(x, a, b) {
     return Math.min(b, Math.max(a, x));
   }
@@ -154,10 +155,15 @@
     const size = markerSizeForZoom(z);
 
     let newest = null;
+    let minP = null;
+    let maxP = null;
+
 
     for (const p of points) {
       const temp = Number(p.airTemp);
       if (!Number.isFinite(temp)) continue;
+      if (!minP || temp < minP.airTemp) minP = { airTemp: temp, name: p.name ?? "Okänd" };
+      if (!maxP || temp > maxP.airTemp) maxP = { airTemp: temp, name: p.name ?? "Okänd" };
 
       if (p.updatedAt) {
         const d = new Date(p.updatedAt);
@@ -180,6 +186,15 @@
       m.addTo(layer);
     }
 
+    if (extremesEl) {
+      if (minP && maxP) {
+        extremesEl.textContent = `Lägst: ${minP.airTemp}°C – ${minP.name}  •  Högst: ${maxP.airTemp}°C – ${maxP.name}`;
+      } else {
+        extremesEl.textContent = "Lägst: –  •  Högst: –";
+      }
+    }
+
+    
     const newestText = newest
       ? ` • Senaste mätning: ${newest.toLocaleString("sv-SE", {
         day: "numeric",
