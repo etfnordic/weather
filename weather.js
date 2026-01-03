@@ -8,6 +8,9 @@
   const legendMaxEl = document.getElementById("legendMax");
   const statusEl = document.getElementById("status");
   const extremesEl = document.getElementById("extremes");
+  const highestEl = document.getElementById("highest");
+  const lowestEl = document.getElementById("lowest");
+
 
   if (legendMinEl) legendMinEl.textContent = `${TEMP_MIN}°C`;
   if (legendMaxEl) legendMaxEl.textContent = `+${TEMP_MAX}°C`;
@@ -185,12 +188,13 @@
       m.addTo(layer);
     }
 
-    if (extremesEl) {
+    if (highestEl && lowestEl) {
       if (minP && maxP) {
-        extremesEl.textContent =
-          `Lägst: ${minP.airTemp}°C – ${minP.name}  •  Högst: ${maxP.airTemp}°C – ${maxP.name}`;
+        highestEl.textContent = `Högst: ${maxP.airTemp}°C – ${maxP.name}`;
+        lowestEl.textContent  = `Lägst: ${minP.airTemp}°C – ${minP.name}`;
       } else {
-        extremesEl.textContent = "Lägst: –  •  Högst: –";
+        highestEl.textContent = "Högst: –";
+        lowestEl.textContent  = "Lägst: –";
       }
     }
 
