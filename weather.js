@@ -1,8 +1,8 @@
 (() => {
   const DATA_URL = "https://weather.etfnordic.workers.dev/api/stations";
 
-  const TEMP_MIN = -25;
-  const TEMP_MAX = 25;
+  const TEMP_MIN = -35;
+  const TEMP_MAX = 35;
 
   document.getElementById("legendMin").textContent = `${TEMP_MIN}°C`;
   document.getElementById("legendMax").textContent = `+${TEMP_MAX}°C`;
@@ -61,22 +61,6 @@
     return lerpColor(COLOR_STOPS, t);
   }
 
-  function fmtTemp(x) {
-    const v = Math.round(x);
-    return `${v}`;
-  }
-
-  function fmtTempPopup(x) {
-    const v = Math.round(x * 10) / 10;
-    return v.toFixed(1);
-  }
-
-  function fmtTime(iso) {
-    if (!iso) return "";
-    const d = new Date(iso);
-    return isNaN(d) ? iso : d.toLocaleString("sv-SE");
-  }
-
   function escapeHtml(str) {
     return String(str)
       .replaceAll("&", "&amp;")
@@ -86,32 +70,62 @@
       .replaceAll("'", "&#039;");
   }
 
+  function fmtTempLabel(temp) {
+    const v = Math.round(temp);
+    return `${v}`;
+  }
+
+  function fmtTempPopup(temp) {
+    const v = Math.round(temp * 10) / 10;
+    return v.toFixed(1);
+  }
+
+  function fmtTime(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return isNaN(d) ? iso : d.toLocaleString("sv-SE");
+  }
+
   function markerSizeForZoom(z) {
-    const base = z <= 5 ? 26 : z <= 7 ? 30 : z <= 9 ? 34 : 38;
-    return base;
+    if (z <= 4) return 18;
+    if (z === 5) return 20;
+    if (z === 6) return 22;
+    if (z === 7) return 24;
+    if (z === 8) return 26;
+    if (z === 9) return 28;
+    if (z === 10) return 30;
+    return 32;
+  }
+
+  function fontSizeForMarker(size) {
+    if (size <= 18) return 10;
+    if (size <= 22) return 11;
+    if (size <= 26) return 12;
+    if (size <= 30) return 13;
+    return 14;
   }
 
   function makeTempDivIcon(temp, color, size) {
-    const text = fmtTemp(temp);
-    const fontSize = size <= 26 ? 11 : size <= 30 ? 12 : size <= 34 ? 13 : 14;
-    const border = "rgba(255,255,255,0.85)";
+    const text = fmtTempLabel(temp);
+    const fontSize = fontSizeForMarker(size);
 
     const html = `
       <div style="
         width:${size}px;height:${size}px;
         border-radius:999px;
         background:${color};
-        border:2px solid ${border};
+        border:0;
         display:flex;
         align-items:center;
         justify-content:center;
-        color:#0b1220;
+        color:#fff;
         font-weight:800;
         font-size:${fontSize}px;
         font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-        box-shadow:0 8px 18px rgba(0,0,0,0.25);
-        text-shadow:none;
+        box-shadow:0 10px 22px rgba(0,0,0,0.28);
+        text-shadow:0 1px 2px rgba(0,0,0,0.65);
         user-select:none;
+        line-height:1;
       ">${escapeHtml(text)}</div>
     `;
 
@@ -124,7 +138,10 @@
     });
   }
 
+  let lastPoints = [];
+
   function render(points) {
+    lastPoints = points;
     layer.clearLayers();
 
     const z = map.getZoom();
@@ -180,6 +197,8 @@
   let zoomTimer = null;
   map.on("zoomend", () => {
     clearTimeout(zoomTimer);
-    zoomTimer = setTimeout(load, 150);
+    zoomTimer = setTimeout(() => {
+      if (lastPoints.length) render(lastPoints);
+    }, 80);
   });
 })();
