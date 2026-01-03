@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Sverige – Lufttemperatur (Trafikverket)</title>
+
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; }
+    .panel {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 1000;
+      background: rgba(0,0,0,0.75);
+      color: white;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font: 14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      max-width: 320px;
+    }
+    .muted { opacity: 0.85; font-size: 12px; margin-top: 4px; }
+    .legend {
+      margin-top: 10px;
+      display: grid;
+      grid-template-columns: 14px 1fr;
+      gap: 6px 10px;
+      align-items: center;
+    }
+    .swatch { width: 14px; height: 14px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="panel">
+    <div><strong>Sverige – Lufttemperatur</strong></div>
+    <div class="muted" id="status">Laddar…</div>
+
+    <div class="legend" aria-label="Legend">
+      <div class="swatch" style="background:#0b1d5c"></div><div>≤ −15°C</div>
+      <div class="swatch" style="background:#1e4fd6"></div><div>−15 till −5</div>
+      <div class="swatch" style="background:#29b6f6"></div><div>−5 till 0</div>
+      <div class="swatch" style="background:#2ecc71"></div><div>0 till 5</div>
+      <div class="swatch" style="background:#f1c40f"></div><div>5 till 15</div>
+      <div class="swatch" style="background:#e74c3c"></div><div>≥ 15°C</div>
+    </div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <script>
+    // 1) ÄNDRA DENNA till din worker endpoint:
+    const DATA_URL = "https://weather.etfnordic.workers.dev/api/stations";
+
+    // Initiera karta (centrera över Sverige)
+    const map = L.map("map", { zoomControl: true }).setView([62.5, 16.5], 5);
+
+    // Baslager (OpenStreetMap)
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    // LayerGroup för alla punkter (så vi kan uppdatera lätt)
+    const layer = L.layerGroup().addTo(map);
+
+    function colorForTemp(t) {
+      if (t <= -15) return "#0b1d5c";
+      if (t <= -5)  return "#1e4fd6";
+      if (t <= 0)   return "#29b6f6";
+      if (t <= 5)   return "#2ecc71";
+      if (t <= 15)  return "#f1c40f";
+      return "#e74c3c";
+    }
+
+    function radiusForZoom() {
+      // lite större när man zoomar in
+      const z = map.getZoom();
+      return Math.max(3, Math.min(9, z - 2));
+    }
+
+    function fmtTemp(x) {
+      return (Math.round(x * 10) / 10).toFixed(1);
+    }
+
+    function fmtTime(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      return isNaN(d) ? iso : d.toLocaleString("sv-SE");
+    }
+
+    async function loadAndRender() {
+      const status = document.getElementById("status");
+      try {
+        status.textContent = "Hämtar data…";
+        const res = await fetch(DATA_URL, { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        layer.clearLayers();
+
+        const r = radiusForZoom();
+        let newest = null;
+
+        for (const p of data) {
+          const t = p.airTemp;
+          const col = colorForTemp(t);
+
+          // Track senaste timestamp för status
+          if (p.updatedAt) {
+            const d = new Date(p.updatedAt);
+            if (!isNaN(d) && (!newest || d > newest)) newest = d;
+          }
+
+          const marker = L.circleMarker([p.lat, p.lon], {
+            radius: r,
+            color: col,
+            weight: 1,
+            fillColor: col,
+            fillOpacity: 0.85,
+          });
+
+          const popup = `
+            <div style="font: 14px/1.25 system-ui;">
+              <div><strong>${escapeHtml(p.name ?? "Station")}</strong></div>
+              <div>Temp: <strong>${fmtTemp(t)}°C</strong></div>
+              <div style="opacity:.75; margin-top:4px;">${escapeHtml(fmtTime(p.updatedAt))}</div>
+            </div>
+          `;
+
+          marker.bindPopup(popup);
+          marker.addTo(layer);
+        }
+
+        // uppdatera radie när man zoomar
+        // (vi gör det enkelt: rensa och rita om vid varje reload redan)
+        status.textContent =
+          `Stationer: ${data.length}` +
+          (newest ? ` • Senaste mätning: ${newest.toLocaleString("sv-SE")}` : "");
+
+      } catch (e) {
+        console.error(e);
+        status.textContent = "Kunde inte hämta data. Kolla console/logs.";
+      }
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    // Ladda direkt + uppdatera var 60:e sekund
+    loadAndRender();
+    setInterval(loadAndRender, 60_000);
+
+    // Om du zoomar mycket och vill att punkterna ska ändra storlek direkt:
+    map.on("zoomend", () => loadAndRender());
+  </script>
+</body>
+</html>
