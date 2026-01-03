@@ -180,9 +180,15 @@
       m.addTo(layer);
     }
 
-    const newestText = newest ? ` • Senaste mätning: ${newest.toLocaleString("sv-SE")}` : "";
-    statusEl.textContent = `Stationer: ${points.length}${newestText}`;
-  }
+    const newestText = newest
+    ? ` • Senaste mätning: ${newest.toLocaleString("sv-SE", {
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      })}`
+    : "";
+
 
   async function load() {
     try {
