@@ -311,12 +311,31 @@
       this.gridStep = 6;
       this.alpha = 0.94;
       this.downscale = 1.7;
+
+      this._zooming = false;
+      this._lastZoomAnim = null;
     }
 
     _updateCanvasPosition() {
       if (!this._canvas) return;
       const pos = map._getMapPanePos();
       L.DomUtil.setPosition(this._canvas, L.point(-pos.x, -pos.y));
+    }
+
+    _applyZoomTransform(e) {
+      if (!this._canvas) return;
+      const scale = map.getZoomScale(e.zoom);
+      const offset = map._getCenterOffset(e.center)._multiplyBy(-scale).subtract(map._getMapPanePos());
+      L.DomUtil.setTransform(this._canvas, offset, scale);
+      this._zooming = true;
+      this._lastZoomAnim = { scale, offset };
+    }
+
+    _clearZoomTransform() {
+      if (!this._canvas) return;
+      this._zooming = false;
+      this._lastZoomAnim = null;
+      this._canvas.style.transform = "";
     }
 
     onAdd() {
@@ -333,6 +352,9 @@
       this._updateCanvasPosition();
       map.on("move", this._updateCanvasPosition, this);
 
+      map.on("zoomanim", this._applyZoomTransform, this);
+      map.on("zoomend", this._clearZoomTransform, this);
+
       map.on("moveend", this._schedule, this);
       map.on("zoomend", this._schedule, this);
       map.on("resize", this._schedule, this);
@@ -342,6 +364,9 @@
 
     onRemove() {
       map.off("move", this._updateCanvasPosition, this);
+      map.off("zoomanim", this._applyZoomTransform, this);
+      map.off("zoomend", this._clearZoomTransform, this);
+
       map.off("moveend", this._schedule, this);
       map.off("zoomend", this._schedule, this);
       map.off("resize", this._schedule, this);
@@ -377,7 +402,7 @@
       });
     }
 
-    _maskOffscreen(ctxOff, w, h, scaleX, scaleY) {
+    _maskOffscreen(ctxOff, scaleX, scaleY) {
       if (!swedenPaths) return;
       ctxOff.globalCompositeOperation = "destination-in";
       ctxOff.fillStyle = "#000";
@@ -469,14 +494,14 @@
       }
 
       ctxOff.putImageData(img, 0, 0);
-      this._maskOffscreen(ctxOff, offW, offH, scaleX, scaleY);
+      this._maskOffscreen(ctxOff, scaleX, scaleY);
 
       ctxOff2.filter = `blur(${this.blur1}px)`;
       ctxOff2.clearRect(0, 0, offW, offH);
       ctxOff2.drawImage(this._off, 0, 0, offW, offH);
       ctxOff2.filter = "none";
 
-      this._maskOffscreen(ctxOff2, offW, offH, scaleX, scaleY);
+      this._maskOffscreen(ctxOff2, scaleX, scaleY);
 
       const ctx = this._ctx;
       ctx.clearRect(0, 0, w, h);
@@ -495,6 +520,10 @@
       ctx.globalAlpha = 1;
 
       ctx.restore();
+
+      if (this._zooming && this._lastZoomAnim) {
+        L.DomUtil.setTransform(this._canvas, this._lastZoomAnim.offset, this._lastZoomAnim.scale);
+      }
     }
   }
 
@@ -564,7 +593,7 @@
     if (showMarkers) {
       if (map.hasLayer(clusterLayer)) map.removeLayer(clusterLayer);
       if (!map.hasLayer(markerLayer)) markerLayer.addTo(map);
-      tempFieldLayer.setOpacity(0.90);
+      tempFieldLayer.setOpacity(0.9);
       tempFieldLayer.gridStep = 5;
       tempFieldLayer.downscale = 1.55;
       tempFieldLayer.blur1 = 8;
