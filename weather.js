@@ -1,5 +1,7 @@
 (() => {
   const DATA_URL = "https://weather.etfnordic.workers.dev/api/stations";
+  const SWEDEN_GEOJSON_URL = "./se.json";
+
   const TEMP_MIN = -40;
   const TEMP_MAX = 40;
 
@@ -127,7 +129,7 @@
         align-items:center;
         justify-content:center;
         color:#fff;
-        font-weight:800;
+        font-weight:900;
         font-size:${fontSize}px;
         font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
         box-shadow:0 10px 22px rgba(0,0,0,0.28);
@@ -156,6 +158,282 @@
       </div>
     `;
   }
+
+  let swedenPaths = null;
+
+  function decimateRing(ring, step) {
+    if (!ring || ring.length < 4) return ring || [];
+    const out = [];
+    for (let i = 0; i < ring.length; i += step) out.push(ring[i]);
+    const last = ring[ring.length - 1];
+    const first = out[0];
+    if (!first || first[0] !== last[0] || first[1] !== last[1]) out.push(first);
+    return out;
+  }
+
+  function preprocessSweden(geojson) {
+    const paths = [];
+    const feats = geojson?.features || [];
+    for (const f of feats) {
+      const g = f.geometry;
+      if (!g) continue;
+      if (g.type === "Polygon") {
+        const poly = [];
+        for (const ring of g.coordinates) {
+          const step = ring.length > 5000 ? 12 : ring.length > 2000 ? 8 : ring.length > 800 ? 4 : 2;
+          poly.push(decimateRing(ring, step));
+        }
+        paths.push({ type: "Polygon", rings: poly });
+      } else if (g.type === "MultiPolygon") {
+        for (const polyCoords of g.coordinates) {
+          const poly = [];
+          for (const ring of polyCoords) {
+            const step = ring.length > 5000 ? 12 : ring.length > 2000 ? 8 : ring.length > 800 ? 4 : 2;
+            poly.push(decimateRing(ring, step));
+          }
+          paths.push({ type: "Polygon", rings: poly });
+        }
+      }
+    }
+    return paths;
+  }
+
+  async function loadSwedenGeoJSON() {
+    try {
+      const res = await fetch(SWEDEN_GEOJSON_URL, { cache: "force-cache" });
+      if (!res.ok) throw new Error(`GeoJSON HTTP ${res.status}`);
+      const gj = await res.json();
+      swedenPaths = preprocessSweden(gj);
+    } catch (e) {
+      console.warn("Could not load Sweden GeoJSON:", e);
+      swedenPaths = null;
+    }
+  }
+
+  function clipSweden(ctx) {
+    if (!swedenPaths) return;
+    ctx.beginPath();
+    for (const poly of swedenPaths) {
+      for (const ring of poly.rings) {
+        for (let i = 0; i < ring.length; i++) {
+          const [lng, lat] = ring[i];
+          const pt = map.latLngToContainerPoint([lat, lng]);
+          if (i === 0) ctx.moveTo(pt.x, pt.y);
+          else ctx.lineTo(pt.x, pt.y);
+        }
+        ctx.closePath();
+      }
+    }
+    ctx.clip("evenodd");
+  }
+
+  let spatialBins = new Map();
+  let lastPoints = [];
+  let pointsVersion = 0;
+
+  function binKey(lat, lon) {
+    const la = Math.floor(lat * 2);
+    const lo = Math.floor(lon * 2);
+    return `${la}:${lo}`;
+  }
+
+  function rebuildBins(points) {
+    spatialBins = new Map();
+    for (const p of points) {
+      const temp = Number(p.airTemp);
+      if (!Number.isFinite(temp)) continue;
+      const k = binKey(p.lat, p.lon);
+      let arr = spatialBins.get(k);
+      if (!arr) { arr = []; spatialBins.set(k, arr); }
+      arr.push({ lat: p.lat, lon: p.lon, temp });
+    }
+  }
+
+  function candidatesAround(lat, lon, need = 24) {
+    const la = Math.floor(lat * 2);
+    const lo = Math.floor(lon * 2);
+    const out = [];
+    for (let d = 0; d <= 6; d++) {
+      for (let y = la - d; y <= la + d; y++) {
+        for (let x = lo - d; x <= lo + d; x++) {
+          const arr = spatialBins.get(`${y}:${x}`);
+          if (arr) out.push(...arr);
+        }
+      }
+      if (out.length >= need) break;
+    }
+    return out;
+  }
+
+  function idwTemp(lat, lon) {
+    const cand = candidatesAround(lat, lon, 30);
+    if (!cand.length) return null;
+
+    let num = 0;
+    let den = 0;
+
+    for (let i = 0; i < cand.length; i++) {
+      const p = cand[i];
+      const dLat = lat - p.lat;
+      const dLon = lon - p.lon;
+      const dist2 = dLat * dLat + dLon * dLon;
+
+      if (dist2 < 1e-10) return p.temp;
+
+      const dist = Math.sqrt(dist2);
+      if (dist > 2.8) continue;
+
+      const w = 1 / Math.pow(dist + 0.18, 0.75);
+      num += w * p.temp;
+      den += w;
+    }
+
+    if (den <= 0) return null;
+    return num / den;
+  }
+
+  class TempFieldCanvasLayer extends L.Layer {
+    constructor() {
+      super();
+      this._canvas = null;
+      this._ctx = null;
+      this._raf = 0;
+      this._lastRenderSig = "";
+      this._off = document.createElement("canvas");
+      this._offCtx = this._off.getContext("2d", { willReadFrequently: false });
+      this.opacity = 0.9;
+      this.blurPx = 14;
+      this.gridStep = 8;
+      this.alpha = 0.92;
+    }
+    onAdd(map) {
+      this._canvas = document.createElement("canvas");
+      this._canvas.style.position = "absolute";
+      this._canvas.style.top = "0";
+      this._canvas.style.left = "0";
+      this._canvas.style.pointerEvents = "none";
+      this._ctx = this._canvas.getContext("2d", { willReadFrequently: false });
+
+      const pane = map.getPanes().overlayPane;
+      pane.appendChild(this._canvas);
+
+      map.on("move", this._schedule, this);
+      map.on("zoom", this._schedule, this);
+      map.on("resize", this._schedule, this);
+
+      this._schedule();
+    }
+    onRemove(map) {
+      map.off("move", this._schedule, this);
+      map.off("zoom", this._schedule, this);
+      map.off("resize", this._schedule, this);
+      if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
+      this._canvas = null;
+      this._ctx = null;
+      if (this._raf) cancelAnimationFrame(this._raf);
+      this._raf = 0;
+    }
+    setOpacity(op) {
+      this.opacity = op;
+      if (this._canvas) this._canvas.style.opacity = String(op);
+    }
+    redraw() {
+      this._schedule(true);
+    }
+    _schedule(force = false) {
+      if (!this._canvas || !this._ctx) return;
+      if (this._raf) return;
+      this._raf = requestAnimationFrame(() => {
+        this._raf = 0;
+        this._render(force);
+      });
+    }
+    _render(force) {
+      if (!this._canvas || !this._ctx) return;
+
+      const size = map.getSize();
+      const w = size.x;
+      const h = size.y;
+
+      const z = map.getZoom();
+      const b = map.getBounds();
+      const sig = `${w}x${h}|z${z}|${b.getSouthWest().lat.toFixed(3)},${b.getSouthWest().lng.toFixed(3)}|v${pointsVersion}`;
+
+      if (!force && sig === this._lastRenderSig) return;
+      this._lastRenderSig = sig;
+
+      this._canvas.width = w;
+      this._canvas.height = h;
+      this._canvas.style.width = `${w}px`;
+      this._canvas.style.height = `${h}px`;
+      this._canvas.style.opacity = String(this.opacity);
+
+      const offW = Math.max(260, Math.floor(w / 2.2));
+      const offH = Math.max(260, Math.floor(h / 2.2));
+      this._off.width = offW;
+      this._off.height = offH;
+
+      const ctxOff = this._offCtx;
+      ctxOff.clearRect(0, 0, offW, offH);
+
+      const step = Math.max(4, Math.floor(this.gridStep));
+      const img = ctxOff.createImageData(offW, offH);
+      const data = img.data;
+
+      const scaleX = w / offW;
+      const scaleY = h / offH;
+
+      for (let y = 0; y < offH; y += 1) {
+        for (let x = 0; x < offW; x += 1) {
+          if ((x % step !== 0) || (y % step !== 0)) continue;
+
+          const cx = x * scaleX;
+          const cy = y * scaleY;
+
+          const ll = map.containerPointToLatLng([cx, cy]);
+          const t = idwTemp(ll.lat, ll.lng);
+          if (t === null) continue;
+
+          const tt = clamp(t, -38, 18);
+          const c = hexToRgb(colorForTemp(tt));
+
+          for (let yy = 0; yy < step; yy++) {
+            for (let xx = 0; xx < step; xx++) {
+              const px = x + xx;
+              const py = y + yy;
+              if (px >= offW || py >= offH) continue;
+              const idx = (py * offW + px) * 4;
+              data[idx] = c.r;
+              data[idx + 1] = c.g;
+              data[idx + 2] = c.b;
+              data[idx + 3] = Math.round(255 * this.alpha);
+            }
+          }
+        }
+      }
+
+      ctxOff.putImageData(img, 0, 0);
+
+      const ctx = this._ctx;
+      ctx.clearRect(0, 0, w, h);
+
+      ctx.save();
+      clipSweden(ctx);
+
+      ctx.imageSmoothingEnabled = true;
+      ctx.globalAlpha = 1;
+      ctx.filter = `blur(${this.blurPx}px)`;
+      ctx.drawImage(this._off, 0, 0, w, h);
+
+      ctx.filter = "none";
+      ctx.drawImage(this._off, 0, 0, w, h);
+
+      ctx.restore();
+    }
+  }
+
+  const tempFieldLayer = new TempFieldCanvasLayer();
+  tempFieldLayer.addTo(map);
 
   const markerLayer = L.layerGroup();
 
@@ -187,242 +465,6 @@
       return L.divIcon({ html, className: "", iconSize: [44, 44] });
     },
   });
-
-  let lastPoints = [];
-  let spatialBins = new Map();
-
-  function binKey(lat, lon) {
-    const la = Math.floor(lat);
-    const lo = Math.floor(lon);
-    return `${la}:${lo}`;
-  }
-
-  function rebuildBins(points) {
-    spatialBins = new Map();
-    for (const p of points) {
-      const temp = Number(p.airTemp);
-      if (!Number.isFinite(temp)) continue;
-      const k = binKey(p.lat, p.lon);
-      let arr = spatialBins.get(k);
-      if (!arr) { arr = []; spatialBins.set(k, arr); }
-      arr.push({ lat: p.lat, lon: p.lon, temp });
-    }
-  }
-
-  function candidatesAround(lat, lon) {
-    const la = Math.floor(lat);
-    const lo = Math.floor(lon);
-    const out = [];
-    for (let d = 0; d <= 4; d++) {
-      for (let y = la - d; y <= la + d; y++) {
-        for (let x = lo - d; x <= lo + d; x++) {
-          const arr = spatialBins.get(`${y}:${x}`);
-          if (arr) out.push(...arr);
-        }
-      }
-      if (out.length >= 80) break;
-    }
-    return out;
-  }
-
-  function idwTemp(lat, lon) {
-    const cand = candidatesAround(lat, lon);
-    if (!cand.length) return null;
-
-    let num = 0;
-    let den = 0;
-
-    for (let i = 0; i < cand.length; i++) {
-      const p = cand[i];
-      const dLat = lat - p.lat;
-      const dLon = lon - p.lon;
-      const dist2 = dLat * dLat + dLon * dLon;
-
-      if (dist2 < 1e-10) return p.temp;
-
-      const dist = Math.sqrt(dist2);
-      if (dist > 3.0) continue;
-
-      const w = 1 / Math.pow(dist + 0.12, 0.45);
-      num += w * p.temp;
-      den += w;
-    }
-
-    if (den <= 0) return null;
-    return num / den;
-  }
-
-  const SWEDEN_GEOJSON = {
-    type: "FeatureCollection",
-    features: [
-      {
-        type: "Feature",
-        properties: { name: "Sweden (rough)" },
-        geometry: {
-          type: "Polygon",
-          coordinates: [[
-            [11.1, 58.9],[11.4, 59.4],[11.7, 60.0],[12.1, 60.7],[12.6, 61.4],[13.2, 62.1],[13.8, 62.9],
-            [14.5, 63.8],[15.2, 64.8],[16.0, 65.8],[17.0, 66.8],[18.0, 67.8],[19.0, 68.5],[20.0, 69.2],
-            [21.3, 69.7],[22.2, 69.2],[22.9, 68.4],[23.0, 67.4],[22.7, 66.2],[22.2, 65.2],[21.5, 64.2],
-            [20.7, 63.2],[19.8, 62.4],[19.0, 61.6],[18.3, 60.8],[17.6, 60.0],[16.8, 59.5],[16.0, 59.1],
-            [15.0, 58.7],[14.0, 58.5],[13.0, 58.3],[12.0, 58.3],[11.4, 58.5],[11.1, 58.9]
-          ]]
-        }
-      }
-    ]
-  };
-
-  function clipToGeoJSON(ctx, coords, size, pad, geojson) {
-    const tileSize = size;
-    const originX = coords.x * tileSize.x;
-    const originY = coords.y * tileSize.y;
-
-    function projectPoint(lng, lat) {
-      const p = map.project(L.latLng(lat, lng), coords.z);
-      return { x: p.x - originX + pad, y: p.y - originY + pad };
-    }
-
-    ctx.beginPath();
-
-    const features = geojson?.features || [];
-    for (const f of features) {
-      const g = f.geometry;
-      if (!g) continue;
-
-      if (g.type === "Polygon") {
-        for (const ring of g.coordinates) {
-          for (let i = 0; i < ring.length; i++) {
-            const [lng, lat] = ring[i];
-            const pt = projectPoint(lng, lat);
-            if (i === 0) ctx.moveTo(pt.x, pt.y);
-            else ctx.lineTo(pt.x, pt.y);
-          }
-          ctx.closePath();
-        }
-      } else if (g.type === "MultiPolygon") {
-        for (const poly of g.coordinates) {
-          for (const ring of poly) {
-            for (let i = 0; i < ring.length; i++) {
-              const [lng, lat] = ring[i];
-              const pt = projectPoint(lng, lat);
-              if (i === 0) ctx.moveTo(pt.x, pt.y);
-              else ctx.lineTo(pt.x, pt.y);
-            }
-            ctx.closePath();
-          }
-        }
-      }
-    }
-
-    ctx.clip("evenodd");
-  }
-
-  class TempFieldLayer extends L.GridLayer {
-    constructor(opts) {
-      super(opts);
-      this._pointsVersion = 0;
-    }
-    setPointsVersion(v) {
-      this._pointsVersion = v;
-      this.redraw();
-    }
-    createTile(coords) {
-      const tile = document.createElement("canvas");
-      const size = this.getTileSize();
-
-      const step = 2;
-      const pad = 24;
-      const blurPx = 10;
-      const alpha = 0.88;
-
-      tile.width = size.x;
-      tile.height = size.y;
-
-      const bigW = size.x + pad * 2;
-      const bigH = size.y + pad * 2;
-
-      const big = document.createElement("canvas");
-      big.width = bigW;
-      big.height = bigH;
-
-      const ctx = big.getContext("2d", { willReadFrequently: false });
-
-      if (SWEDEN_GEOJSON) {
-        ctx.save();
-        clipToGeoJSON(ctx, coords, size, pad, SWEDEN_GEOJSON);
-      }
-
-      const img = ctx.createImageData(bigW, bigH);
-      const data = img.data;
-
-      const z = coords.z;
-      const originX = coords.x * size.x;
-      const originY = coords.y * size.y;
-
-      for (let y = 0; y < bigH; y += step) {
-        for (let x = 0; x < bigW; x += step) {
-          const worldX = originX + (x - pad);
-          const worldY = originY + (y - pad);
-
-          const ll = map.unproject(L.point(worldX, worldY), z);
-          const t = idwTemp(ll.lat, ll.lng);
-          if (t === null) continue;
-
-          const tt = clamp(t, -35, 15);
-          const c = hexToRgb(colorForTemp(tt));
-
-          for (let yy = 0; yy < step; yy++) {
-            for (let xx = 0; xx < step; xx++) {
-              const px = x + xx;
-              const py = y + yy;
-              if (px >= bigW || py >= bigH) continue;
-              const idx = (py * bigW + px) * 4;
-              data[idx] = c.r;
-              data[idx + 1] = c.g;
-              data[idx + 2] = c.b;
-              data[idx + 3] = Math.round(255 * alpha);
-            }
-          }
-        }
-      }
-
-      ctx.putImageData(img, 0, 0);
-
-      if (SWEDEN_GEOJSON) ctx.restore();
-
-      const outCtx = tile.getContext("2d", { willReadFrequently: false });
-      outCtx.clearRect(0, 0, size.x, size.y);
-
-      outCtx.filter = `blur(${blurPx}px)`;
-      outCtx.globalAlpha = 1;
-      outCtx.drawImage(
-        big,
-        pad, pad, size.x, size.y,
-        0, 0, size.x, size.y
-      );
-      outCtx.filter = "none";
-
-      outCtx.globalAlpha = 1;
-      outCtx.drawImage(
-        big,
-        pad, pad, size.x, size.y,
-        0, 0, size.x, size.y
-      );
-
-      return tile;
-    }
-  }
-
-  const tempFieldLayer = new TempFieldLayer({
-    tileSize: 256,
-    opacity: 1,
-    updateWhenIdle: true,
-    updateWhenZooming: false,
-    keepBuffer: 2,
-    zIndex: 300,
-  });
-
-  tempFieldLayer.addTo(map);
 
   function buildClusters(points) {
     clusterLayer.clearLayers();
@@ -456,12 +498,18 @@
     if (showMarkers) {
       if (map.hasLayer(clusterLayer)) map.removeLayer(clusterLayer);
       if (!map.hasLayer(markerLayer)) markerLayer.addTo(map);
-      tempFieldLayer.setOpacity(0.80);
+      tempFieldLayer.setOpacity(0.88);
+      tempFieldLayer.gridStep = 6;
+      tempFieldLayer.blurPx = 12;
     } else {
       if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
       if (!map.hasLayer(clusterLayer)) clusterLayer.addTo(map);
-      tempFieldLayer.setOpacity(0.90);
+      tempFieldLayer.setOpacity(0.92);
+      tempFieldLayer.gridStep = 8;
+      tempFieldLayer.blurPx = 16;
     }
+
+    tempFieldLayer.redraw();
   }
 
   function updateStatus(points) {
@@ -496,26 +544,28 @@
     if (statusEl) statusEl.textContent = `Stationer: ${points.length}${newestText}`;
   }
 
-  let pointsVersion = 0;
-
   function render(points) {
     lastPoints = points;
     rebuildBins(points);
     buildClusters(points);
     buildMarkers(points);
-    setLayersForZoom();
     updateStatus(points);
     pointsVersion++;
-    tempFieldLayer.setPointsVersion(pointsVersion);
+    setLayersForZoom();
+  }
+
+  async function loadStations() {
+    const res = await fetch(DATA_URL, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
   }
 
   async function load() {
     try {
       if (statusEl) statusEl.textContent = "Hämtar data…";
-      const res = await fetch(DATA_URL, { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      render(Array.isArray(data) ? data : []);
+      const points = await loadStations();
+      render(points);
     } catch (e) {
       console.error(e);
       if (statusEl) statusEl.textContent = "Kunde inte hämta data (kolla console).";
@@ -524,20 +574,16 @@
     }
   }
 
-  load();
-  setInterval(load, 60_000);
-
-  let zoomTimer = null;
-  map.on("zoomend", () => {
-    clearTimeout(zoomTimer);
-    zoomTimer = setTimeout(() => {
+  (async () => {
+    await loadSwedenGeoJSON();
+    await load();
+    setInterval(load, 60_000);
+    map.on("zoomend", () => {
       setLayersForZoom();
       if (map.getZoom() >= 9 && lastPoints.length) buildMarkers(lastPoints);
+    });
+    map.on("moveend", () => {
       tempFieldLayer.redraw();
-    }, 60);
-  });
-
-  map.on("moveend", () => {
-    tempFieldLayer.redraw();
-  });
+    });
+  })();
 })();
