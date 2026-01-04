@@ -118,14 +118,14 @@
         align-items:center;
         justify-content:center;
         color:#fff;
-        font-weight:600;
+        font-weight:700;
         font-size:${fontSize}px;
         font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
         box-shadow:0 10px 22px rgba(0,0,0,0.28);
         text-shadow:0 1px 2px rgba(0,0,0,0.65);
         user-select:none;
         line-height:1;
-      ">${escapeHtml(text)}</div>
+      ">${escapeHtml(text)}°</div>
     `;
     const icon = L.divIcon({
       className: "",
@@ -138,44 +138,6 @@
     return icon;
   }
 
-  const markerLayer = L.layerGroup();
-
-  const clusterLayer = L.markerClusterGroup({
-    disableClusteringAtZoom: 9,
-    spiderfyOnMaxZoom: true,
-    showCoverageOnHover: false,
-    iconCreateFunction: function (cluster) {
-      const ms = cluster.getAllChildMarkers();
-      let sum = 0, n = 0;
-
-      for (const m of ms) {
-        const t = Number(m?.options?.icon?._temp);
-        if (Number.isFinite(t)) { sum += t; n++; }
-      }
-
-      const avg = n ? sum / n : 0;
-      const label = Math.round(avg);
-      const color = colorForTemp(avg);
-
-      const html = `
-        <div style="
-          width:44px;height:44px;border-radius:999px;
-          background:${color};
-          display:flex;align-items:center;justify-content:center;
-          color:#fff;font-weight:700;font-size:14px;
-          box-shadow:0 10px 22px rgba(0,0,0,0.28);
-          text-shadow:0 1px 2px rgba(0,0,0,0.65);
-          user-select:none;
-        ">${label}°</div>
-      `;
-
-      return L.divIcon({ html, className: "", iconSize: [44, 44] });
-    },
-  });
-
-  let heatLayer = null;
-  let lastPoints = [];
-
   function popupHtml(p) {
     return `
       <div style="font: 14px/1.25 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
@@ -186,34 +148,168 @@
     `;
   }
 
-  function buildHeat(points) {
-    const heatPoints = [];
+  const markerLayer = L.layerGroup();
 
+  const clusterLayer = L.markerClusterGroup({
+    disableClusteringAtZoom: 9,
+    spiderfyOnMaxZoom: true,
+    showCoverageOnHover: false,
+    iconCreateFunction: function (cluster) {
+      const ms = cluster.getAllChildMarkers();
+      let sum = 0, n = 0;
+      for (const m of ms) {
+        const t = Number(m?.options?.icon?._temp);
+        if (Number.isFinite(t)) { sum += t; n++; }
+      }
+      const avg = n ? sum / n : 0;
+      const label = Math.round(avg);
+      const color = colorForTemp(avg);
+      const html = `
+        <div style="
+          width:44px;height:44px;border-radius:999px;
+          background:${color};
+          display:flex;align-items:center;justify-content:center;
+          color:#fff;font-weight:800;font-size:14px;
+          box-shadow:0 10px 22px rgba(0,0,0,0.28);
+          text-shadow:0 1px 2px rgba(0,0,0,0.65);
+          user-select:none;
+        ">${label}°</div>
+      `;
+      return L.divIcon({ html, className: "", iconSize: [44, 44] });
+    },
+  });
+
+  let lastPoints = [];
+  let spatialBins = new Map();
+
+  function binKey(lat, lon) {
+    const la = Math.floor(lat);
+    const lo = Math.floor(lon);
+    return `${la}:${lo}`;
+  }
+
+  function rebuildBins(points) {
+    spatialBins = new Map();
     for (const p of points) {
       const temp = Number(p.airTemp);
       if (!Number.isFinite(temp)) continue;
+      const k = binKey(p.lat, p.lon);
+      let arr = spatialBins.get(k);
+      if (!arr) { arr = []; spatialBins.set(k, arr); }
+      arr.push({ lat: p.lat, lon: p.lon, temp });
+    }
+  }
 
-      const tNorm = clamp((temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN), 0, 1);
-      heatPoints.push([p.lat, p.lon, tNorm]);
+  function candidatesAround(lat, lon) {
+    const la = Math.floor(lat);
+    const lo = Math.floor(lon);
+    const out = [];
+    for (let d = 0; d <= 2; d++) {
+      for (let y = la - d; y <= la + d; y++) {
+        for (let x = lo - d; x <= lo + d; x++) {
+          const arr = spatialBins.get(`${y}:${x}`);
+          if (arr) out.push(...arr);
+        }
+      }
+      if (out.length >= 40) break;
+    }
+    return out;
+  }
+
+  function idwTemp(lat, lon) {
+    const cand = candidatesAround(lat, lon);
+    if (!cand.length) return null;
+
+    let num = 0;
+    let den = 0;
+
+    for (let i = 0; i < cand.length; i++) {
+      const p = cand[i];
+      const dLat = lat - p.lat;
+      const dLon = lon - p.lon;
+      const dist2 = dLat * dLat + dLon * dLon;
+
+      if (dist2 < 1e-10) return p.temp;
+
+      const w = 1 / dist2;
+      num += w * p.temp;
+      den += w;
     }
 
-    if (heatLayer) map.removeLayer(heatLayer);
-
-    heatLayer = L.heatLayer(heatPoints, {
-      radius: 35,
-      blur: 28,
-      maxZoom: 8,
-      minOpacity: 0.35,
-      gradient: {
-        0.00: "#000000",
-        0.25: "#002b7f",
-        0.44: "#1e6cff",
-        0.50: "#00b050",
-        0.75: "#ffd200",
-        1.00: "#c00000",
-      },
-    });
+    if (den <= 0) return null;
+    return num / den;
   }
+
+  function hexToRgb(hex) {
+    const h = hex.replace("#", "");
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return { r, g, b };
+  }
+
+  class TempFieldLayer extends L.GridLayer {
+    constructor(opts) {
+      super(opts);
+      this._pointsVersion = 0;
+    }
+    setPointsVersion(v) {
+      this._pointsVersion = v;
+      this.redraw();
+    }
+    createTile(coords) {
+      const tile = document.createElement("canvas");
+      const size = this.getTileSize();
+      tile.width = size.x;
+      tile.height = size.y;
+
+      const ctx = tile.getContext("2d", { willReadFrequently: false });
+      const img = ctx.createImageData(size.x, size.y);
+      const data = img.data;
+
+      const step = 4;
+      const opacity = 0.70;
+
+      for (let y = 0; y < size.y; y += step) {
+        for (let x = 0; x < size.x; x += step) {
+          const ll = map.unproject(
+            L.point(coords.x * size.x + x, coords.y * size.y + y),
+            coords.z
+          );
+          const t = idwTemp(ll.lat, ll.lng);
+          if (t === null) continue;
+
+          const c = hexToRgb(colorForTemp(t));
+          for (let yy = 0; yy < step; yy++) {
+            for (let xx = 0; xx < step; xx++) {
+              const px = x + xx;
+              const py = y + yy;
+              if (px >= size.x || py >= size.y) continue;
+              const idx = (py * size.x + px) * 4;
+              data[idx] = c.r;
+              data[idx + 1] = c.g;
+              data[idx + 2] = c.b;
+              data[idx + 3] = Math.round(255 * opacity);
+            }
+          }
+        }
+      }
+
+      ctx.putImageData(img, 0, 0);
+      return tile;
+    }
+  }
+
+  const tempFieldLayer = new TempFieldLayer({
+    tileSize: 256,
+    opacity: 1,
+    updateWhenIdle: true,
+    updateWhenZooming: false,
+    keepBuffer: 2,
+    zIndex: 300,
+  });
+
+  tempFieldLayer.addTo(map);
 
   function buildClusters(points) {
     clusterLayer.clearLayers();
@@ -244,16 +340,14 @@
     const z = map.getZoom();
     const showMarkers = z >= 9;
 
-    if (!heatLayer) return;
-
     if (showMarkers) {
-      if (map.hasLayer(heatLayer)) map.removeLayer(heatLayer);
       if (map.hasLayer(clusterLayer)) map.removeLayer(clusterLayer);
       if (!map.hasLayer(markerLayer)) markerLayer.addTo(map);
+      tempFieldLayer.setOpacity(0.55);
     } else {
-      if (!map.hasLayer(heatLayer)) heatLayer.addTo(map);
-      if (!map.hasLayer(clusterLayer)) clusterLayer.addTo(map);
       if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
+      if (!map.hasLayer(clusterLayer)) clusterLayer.addTo(map);
+      tempFieldLayer.setOpacity(0.75);
     }
   }
 
@@ -289,13 +383,17 @@
     if (statusEl) statusEl.textContent = `Stationer: ${points.length}${newestText}`;
   }
 
+  let pointsVersion = 0;
+
   function render(points) {
     lastPoints = points;
-    buildHeat(points);
+    rebuildBins(points);
     buildClusters(points);
     buildMarkers(points);
     setLayersForZoom();
     updateStatus(points);
+    pointsVersion++;
+    tempFieldLayer.setPointsVersion(pointsVersion);
   }
 
   async function load() {
@@ -322,6 +420,11 @@
     zoomTimer = setTimeout(() => {
       setLayersForZoom();
       if (map.getZoom() >= 9 && lastPoints.length) buildMarkers(lastPoints);
+      tempFieldLayer.redraw();
     }, 60);
+  });
+
+  map.on("moveend", () => {
+    tempFieldLayer.redraw();
   });
 })();
