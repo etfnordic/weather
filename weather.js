@@ -62,6 +62,15 @@
     return lerpColor(COLOR_STOPS, t);
   }
 
+  function hexToRgb(hex) {
+    const h = hex.replace("#", "");
+    return {
+      r: parseInt(h.slice(0, 2), 16),
+      g: parseInt(h.slice(2, 4), 16),
+      b: parseInt(h.slice(4, 6), 16),
+    };
+  }
+
   function escapeHtml(str) {
     return String(str)
       .replaceAll("&", "&amp;")
@@ -118,7 +127,7 @@
         align-items:center;
         justify-content:center;
         color:#fff;
-        font-weight:700;
+        font-weight:800;
         font-size:${fontSize}px;
         font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
         box-shadow:0 10px 22px rgba(0,0,0,0.28);
@@ -169,7 +178,7 @@
           width:44px;height:44px;border-radius:999px;
           background:${color};
           display:flex;align-items:center;justify-content:center;
-          color:#fff;font-weight:800;font-size:14px;
+          color:#fff;font-weight:900;font-size:14px;
           box-shadow:0 10px 22px rgba(0,0,0,0.28);
           text-shadow:0 1px 2px rgba(0,0,0,0.65);
           user-select:none;
@@ -204,14 +213,14 @@
     const la = Math.floor(lat);
     const lo = Math.floor(lon);
     const out = [];
-    for (let d = 0; d <= 2; d++) {
+    for (let d = 0; d <= 4; d++) {
       for (let y = la - d; y <= la + d; y++) {
         for (let x = lo - d; x <= lo + d; x++) {
           const arr = spatialBins.get(`${y}:${x}`);
           if (arr) out.push(...arr);
         }
       }
-      if (out.length >= 40) break;
+      if (out.length >= 80) break;
     }
     return out;
   }
@@ -231,7 +240,10 @@
 
       if (dist2 < 1e-10) return p.temp;
 
-      const w = 1 / dist2;
+      const dist = Math.sqrt(dist2);
+      if (dist > 3.0) continue;
+
+      const w = 1 / Math.pow(dist + 0.12, 0.45);
       num += w * p.temp;
       den += w;
     }
@@ -240,12 +252,69 @@
     return num / den;
   }
 
-  function hexToRgb(hex) {
-    const h = hex.replace("#", "");
-    const r = parseInt(h.slice(0, 2), 16);
-    const g = parseInt(h.slice(2, 4), 16);
-    const b = parseInt(h.slice(4, 6), 16);
-    return { r, g, b };
+  const SWEDEN_GEOJSON = {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: { name: "Sweden (rough)" },
+        geometry: {
+          type: "Polygon",
+          coordinates: [[
+            [11.1, 58.9],[11.4, 59.4],[11.7, 60.0],[12.1, 60.7],[12.6, 61.4],[13.2, 62.1],[13.8, 62.9],
+            [14.5, 63.8],[15.2, 64.8],[16.0, 65.8],[17.0, 66.8],[18.0, 67.8],[19.0, 68.5],[20.0, 69.2],
+            [21.3, 69.7],[22.2, 69.2],[22.9, 68.4],[23.0, 67.4],[22.7, 66.2],[22.2, 65.2],[21.5, 64.2],
+            [20.7, 63.2],[19.8, 62.4],[19.0, 61.6],[18.3, 60.8],[17.6, 60.0],[16.8, 59.5],[16.0, 59.1],
+            [15.0, 58.7],[14.0, 58.5],[13.0, 58.3],[12.0, 58.3],[11.4, 58.5],[11.1, 58.9]
+          ]]
+        }
+      }
+    ]
+  };
+
+  function clipToGeoJSON(ctx, coords, size, pad, geojson) {
+    const tileSize = size;
+    const originX = coords.x * tileSize.x;
+    const originY = coords.y * tileSize.y;
+
+    function projectPoint(lng, lat) {
+      const p = map.project(L.latLng(lat, lng), coords.z);
+      return { x: p.x - originX + pad, y: p.y - originY + pad };
+    }
+
+    ctx.beginPath();
+
+    const features = geojson?.features || [];
+    for (const f of features) {
+      const g = f.geometry;
+      if (!g) continue;
+
+      if (g.type === "Polygon") {
+        for (const ring of g.coordinates) {
+          for (let i = 0; i < ring.length; i++) {
+            const [lng, lat] = ring[i];
+            const pt = projectPoint(lng, lat);
+            if (i === 0) ctx.moveTo(pt.x, pt.y);
+            else ctx.lineTo(pt.x, pt.y);
+          }
+          ctx.closePath();
+        }
+      } else if (g.type === "MultiPolygon") {
+        for (const poly of g.coordinates) {
+          for (const ring of poly) {
+            for (let i = 0; i < ring.length; i++) {
+              const [lng, lat] = ring[i];
+              const pt = projectPoint(lng, lat);
+              if (i === 0) ctx.moveTo(pt.x, pt.y);
+              else ctx.lineTo(pt.x, pt.y);
+            }
+            ctx.closePath();
+          }
+        }
+      }
+    }
+
+    ctx.clip("evenodd");
   }
 
   class TempFieldLayer extends L.GridLayer {
@@ -260,42 +329,86 @@
     createTile(coords) {
       const tile = document.createElement("canvas");
       const size = this.getTileSize();
+
+      const step = 2;
+      const pad = 24;
+      const blurPx = 10;
+      const alpha = 0.88;
+
       tile.width = size.x;
       tile.height = size.y;
 
-      const ctx = tile.getContext("2d", { willReadFrequently: false });
-      const img = ctx.createImageData(size.x, size.y);
+      const bigW = size.x + pad * 2;
+      const bigH = size.y + pad * 2;
+
+      const big = document.createElement("canvas");
+      big.width = bigW;
+      big.height = bigH;
+
+      const ctx = big.getContext("2d", { willReadFrequently: false });
+
+      if (SWEDEN_GEOJSON) {
+        ctx.save();
+        clipToGeoJSON(ctx, coords, size, pad, SWEDEN_GEOJSON);
+      }
+
+      const img = ctx.createImageData(bigW, bigH);
       const data = img.data;
 
-      const step = 4;
-      const opacity = 0.70;
+      const z = coords.z;
+      const originX = coords.x * size.x;
+      const originY = coords.y * size.y;
 
-      for (let y = 0; y < size.y; y += step) {
-        for (let x = 0; x < size.x; x += step) {
-          const ll = map.unproject(
-            L.point(coords.x * size.x + x, coords.y * size.y + y),
-            coords.z
-          );
+      for (let y = 0; y < bigH; y += step) {
+        for (let x = 0; x < bigW; x += step) {
+          const worldX = originX + (x - pad);
+          const worldY = originY + (y - pad);
+
+          const ll = map.unproject(L.point(worldX, worldY), z);
           const t = idwTemp(ll.lat, ll.lng);
           if (t === null) continue;
 
-          const c = hexToRgb(colorForTemp(t));
+          const tt = clamp(t, -35, 15);
+          const c = hexToRgb(colorForTemp(tt));
+
           for (let yy = 0; yy < step; yy++) {
             for (let xx = 0; xx < step; xx++) {
               const px = x + xx;
               const py = y + yy;
-              if (px >= size.x || py >= size.y) continue;
-              const idx = (py * size.x + px) * 4;
+              if (px >= bigW || py >= bigH) continue;
+              const idx = (py * bigW + px) * 4;
               data[idx] = c.r;
               data[idx + 1] = c.g;
               data[idx + 2] = c.b;
-              data[idx + 3] = Math.round(255 * opacity);
+              data[idx + 3] = Math.round(255 * alpha);
             }
           }
         }
       }
 
       ctx.putImageData(img, 0, 0);
+
+      if (SWEDEN_GEOJSON) ctx.restore();
+
+      const outCtx = tile.getContext("2d", { willReadFrequently: false });
+      outCtx.clearRect(0, 0, size.x, size.y);
+
+      outCtx.filter = `blur(${blurPx}px)`;
+      outCtx.globalAlpha = 1;
+      outCtx.drawImage(
+        big,
+        pad, pad, size.x, size.y,
+        0, 0, size.x, size.y
+      );
+      outCtx.filter = "none";
+
+      outCtx.globalAlpha = 1;
+      outCtx.drawImage(
+        big,
+        pad, pad, size.x, size.y,
+        0, 0, size.x, size.y
+      );
+
       return tile;
     }
   }
@@ -343,11 +456,11 @@
     if (showMarkers) {
       if (map.hasLayer(clusterLayer)) map.removeLayer(clusterLayer);
       if (!map.hasLayer(markerLayer)) markerLayer.addTo(map);
-      tempFieldLayer.setOpacity(0.55);
+      tempFieldLayer.setOpacity(0.80);
     } else {
       if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
       if (!map.hasLayer(clusterLayer)) clusterLayer.addTo(map);
-      tempFieldLayer.setOpacity(0.75);
+      tempFieldLayer.setOpacity(0.90);
     }
   }
 
@@ -428,4 +541,3 @@
     tempFieldLayer.redraw();
   });
 })();
-
