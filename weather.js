@@ -51,12 +51,12 @@
   }
 
   const COLOR_STOPS = [
-    { t: 0.00, r: 0, g: 0, b: 0 },
+    { t: 0.0, r: 0, g: 0, b: 0 },
     { t: 0.25, r: 0, g: 43, b: 127 },
     { t: 0.4375, r: 30, g: 108, b: 255 },
-    { t: 0.50, r: 0, g: 176, b: 80 },
+    { t: 0.5, r: 0, g: 176, b: 80 },
     { t: 0.75, r: 255, g: 210, b: 0 },
-    { t: 1.00, r: 192, g: 0, b: 0 },
+    { t: 1.0, r: 192, g: 0, b: 0 },
   ];
 
   function colorForTemp(temp) {
@@ -181,7 +181,11 @@
       const pushPoly = (coords) => {
         const rings = [];
         for (const ring of coords) {
-          const step = ring.length > 8000 ? 14 : ring.length > 3000 ? 10 : ring.length > 1200 ? 6 : ring.length > 600 ? 4 : 2;
+          const step =
+            ring.length > 8000 ? 14 :
+            ring.length > 3000 ? 10 :
+            ring.length > 1200 ? 6 :
+            ring.length > 600 ? 4 : 2;
           rings.push(decimateRing(ring, step));
         }
         paths.push({ rings });
@@ -205,18 +209,16 @@
     }
   }
 
-  function clipSweden(ctx, topLeftLayerPoint) {
+  function clipSwedenContainer(ctx) {
     if (!swedenPaths) return;
     ctx.beginPath();
     for (const poly of swedenPaths) {
       for (const ring of poly.rings) {
         for (let i = 0; i < ring.length; i++) {
           const [lng, lat] = ring[i];
-          const lp = map.latLngToLayerPoint([lat, lng]);
-          const x = lp.x - topLeftLayerPoint.x;
-          const y = lp.y - topLeftLayerPoint.y;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+          const pt = map.latLngToContainerPoint([lat, lng]);
+          if (i === 0) ctx.moveTo(pt.x, pt.y);
+          else ctx.lineTo(pt.x, pt.y);
         }
         ctx.closePath();
       }
@@ -297,6 +299,7 @@
       this._raf = 0;
       this._pending = false;
       this._lastSig = "";
+
       this._off = document.createElement("canvas");
       this._off2 = document.createElement("canvas");
       this._offCtx = this._off.getContext("2d", { willReadFrequently: false });
@@ -310,6 +313,12 @@
       this.downscale = 1.7;
     }
 
+    _updateCanvasPosition() {
+      if (!this._canvas) return;
+      const pos = map._getMapPanePos();
+      L.DomUtil.setPosition(this._canvas, L.point(-pos.x, -pos.y));
+    }
+
     onAdd() {
       this._canvas = document.createElement("canvas");
       this._canvas.style.position = "absolute";
@@ -321,6 +330,9 @@
 
       map.getPanes().overlayPane.appendChild(this._canvas);
 
+      this._updateCanvasPosition();
+      map.on("move", this._updateCanvasPosition, this);
+
       map.on("moveend", this._schedule, this);
       map.on("zoomend", this._schedule, this);
       map.on("resize", this._schedule, this);
@@ -329,9 +341,11 @@
     }
 
     onRemove() {
+      map.off("move", this._updateCanvasPosition, this);
       map.off("moveend", this._schedule, this);
       map.off("zoomend", this._schedule, this);
       map.off("resize", this._schedule, this);
+
       if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
       this._canvas = null;
       this._ctx = null;
@@ -363,14 +377,42 @@
       });
     }
 
+    _maskOffscreen(ctxOff, w, h, scaleX, scaleY) {
+      if (!swedenPaths) return;
+      ctxOff.globalCompositeOperation = "destination-in";
+      ctxOff.fillStyle = "#000";
+      ctxOff.beginPath();
+
+      for (const poly of swedenPaths) {
+        for (const ring of poly.rings) {
+          for (let i = 0; i < ring.length; i++) {
+            const [lng, lat] = ring[i];
+            const pt = map.latLngToContainerPoint([lat, lng]);
+            const cx = pt.x / scaleX;
+            const cy = pt.y / scaleY;
+            if (i === 0) ctxOff.moveTo(cx, cy);
+            else ctxOff.lineTo(cx, cy);
+          }
+          ctxOff.closePath();
+        }
+      }
+
+      ctxOff.fill("evenodd");
+      ctxOff.globalCompositeOperation = "source-over";
+    }
+
     _render(force) {
+      if (!this._canvas || !this._ctx) return;
+
+      this._updateCanvasPosition();
+
       const size = map.getSize();
       const w = size.x;
       const h = size.y;
 
       const b = map.getBounds();
       const z = map.getZoom();
-      const sig = `${w}x${h}|z${z}|${b.getSouthWest().lat.toFixed(3)},${b.getSouthWest().lng.toFixed(3)}|v${pointsVersion}|g${this.gridStep}|d${this.downscale}`;
+      const sig = `${w}x${h}|z${z}|${b.getSouthWest().lat.toFixed(3)},${b.getSouthWest().lng.toFixed(3)}|v${pointsVersion}|g${this.gridStep}|d${this.downscale}|b${this.blur1},${this.blur2}`;
       if (!force && sig === this._lastSig) return;
       this._lastSig = sig;
 
@@ -379,8 +421,6 @@
       this._canvas.style.width = `${w}px`;
       this._canvas.style.height = `${h}px`;
       this._canvas.style.opacity = String(this.opacity);
-
-      const topLeft = map.containerPointToLayerPoint([0, 0]);
 
       const offW = Math.max(320, Math.floor(w / this.downscale));
       const offH = Math.max(320, Math.floor(h / this.downscale));
@@ -405,9 +445,8 @@
         for (let x = 0; x < offW; x += step) {
           const cx = x * scaleX;
           const cy = y * scaleY;
-          const lp = L.point(topLeft.x + cx, topLeft.y + cy);
-          const ll = map.layerPointToLatLng(lp);
 
+          const ll = map.containerPointToLatLng([cx, cy]);
           const t = idwTemp(ll.lat, ll.lng);
           if (t === null) continue;
 
@@ -430,46 +469,28 @@
       }
 
       ctxOff.putImageData(img, 0, 0);
-
-      if (swedenPaths) {
-        ctxOff.globalCompositeOperation = "destination-in";
-        ctxOff.fillStyle = "#000";
-        ctxOff.beginPath();
-        for (const poly of swedenPaths) {
-          for (const ring of poly.rings) {
-            for (let i = 0; i < ring.length; i++) {
-              const [lng, lat] = ring[i];
-              const lp = map.latLngToLayerPoint([lat, lng]);
-              const cx = (lp.x - topLeft.x) / scaleX;
-              const cy = (lp.y - topLeft.y) / scaleY;
-              if (i === 0) ctxOff.moveTo(cx, cy);
-              else ctxOff.lineTo(cx, cy);
-            }
-            ctxOff.closePath();
-          }
-        }
-        ctxOff.fill("evenodd");
-        ctxOff.globalCompositeOperation = "source-over";
-      }
-
-      const ctx = this._ctx;
-      ctx.clearRect(0, 0, w, h);
-
-      ctx.save();
-      clipSweden(ctx, topLeft);
-
-      ctx.imageSmoothingEnabled = true;
+      this._maskOffscreen(ctxOff, offW, offH, scaleX, scaleY);
 
       ctxOff2.filter = `blur(${this.blur1}px)`;
       ctxOff2.clearRect(0, 0, offW, offH);
       ctxOff2.drawImage(this._off, 0, 0, offW, offH);
       ctxOff2.filter = "none";
 
+      this._maskOffscreen(ctxOff2, offW, offH, scaleX, scaleY);
+
+      const ctx = this._ctx;
+      ctx.clearRect(0, 0, w, h);
+
+      ctx.save();
+      clipSwedenContainer(ctx);
+
+      ctx.imageSmoothingEnabled = true;
+
       ctx.filter = `blur(${this.blur2}px)`;
       ctx.drawImage(this._off2, 0, 0, offW, offH, 0, 0, w, h);
 
       ctx.filter = "none";
-      ctx.globalAlpha = 0.85;
+      ctx.globalAlpha = 0.88;
       ctx.drawImage(this._off2, 0, 0, offW, offH, 0, 0, w, h);
       ctx.globalAlpha = 1;
 
@@ -553,9 +574,9 @@
       if (!map.hasLayer(clusterLayer)) clusterLayer.addTo(map);
       tempFieldLayer.setOpacity(0.93);
       tempFieldLayer.gridStep = 6;
-      tempFieldLayer.downscale = 1.7;
+      tempFieldLayer.downscale = 1.8;
       tempFieldLayer.blur1 = 10;
-      tempFieldLayer.blur2 = 18;
+      tempFieldLayer.blur2 = 20;
     }
 
     tempFieldLayer.redraw();
