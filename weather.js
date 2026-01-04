@@ -165,9 +165,9 @@
     if (!ring || ring.length < 4) return ring || [];
     const out = [];
     for (let i = 0; i < ring.length; i += step) out.push(ring[i]);
-    const last = ring[ring.length - 1];
     const first = out[0];
-    if (!first || first[0] !== last[0] || first[1] !== last[1]) out.push(first);
+    const last = out[out.length - 1];
+    if (first && last && (first[0] !== last[0] || first[1] !== last[1])) out.push(first);
     return out;
   }
 
@@ -177,23 +177,18 @@
     for (const f of feats) {
       const g = f.geometry;
       if (!g) continue;
-      if (g.type === "Polygon") {
-        const poly = [];
-        for (const ring of g.coordinates) {
-          const step = ring.length > 5000 ? 12 : ring.length > 2000 ? 8 : ring.length > 800 ? 4 : 2;
-          poly.push(decimateRing(ring, step));
+
+      const pushPoly = (coords) => {
+        const rings = [];
+        for (const ring of coords) {
+          const step = ring.length > 8000 ? 14 : ring.length > 3000 ? 10 : ring.length > 1200 ? 6 : ring.length > 600 ? 4 : 2;
+          rings.push(decimateRing(ring, step));
         }
-        paths.push({ type: "Polygon", rings: poly });
-      } else if (g.type === "MultiPolygon") {
-        for (const polyCoords of g.coordinates) {
-          const poly = [];
-          for (const ring of polyCoords) {
-            const step = ring.length > 5000 ? 12 : ring.length > 2000 ? 8 : ring.length > 800 ? 4 : 2;
-            poly.push(decimateRing(ring, step));
-          }
-          paths.push({ type: "Polygon", rings: poly });
-        }
-      }
+        paths.push({ rings });
+      };
+
+      if (g.type === "Polygon") pushPoly(g.coordinates);
+      if (g.type === "MultiPolygon") for (const poly of g.coordinates) pushPoly(poly);
     }
     return paths;
   }
@@ -210,16 +205,18 @@
     }
   }
 
-  function clipSweden(ctx) {
+  function clipSweden(ctx, topLeftLayerPoint) {
     if (!swedenPaths) return;
     ctx.beginPath();
     for (const poly of swedenPaths) {
       for (const ring of poly.rings) {
         for (let i = 0; i < ring.length; i++) {
           const [lng, lat] = ring[i];
-          const pt = map.latLngToContainerPoint([lat, lng]);
-          if (i === 0) ctx.moveTo(pt.x, pt.y);
-          else ctx.lineTo(pt.x, pt.y);
+          const lp = map.latLngToLayerPoint([lat, lng]);
+          const x = lp.x - topLeftLayerPoint.x;
+          const y = lp.y - topLeftLayerPoint.y;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
         }
         ctx.closePath();
       }
@@ -249,7 +246,7 @@
     }
   }
 
-  function candidatesAround(lat, lon, need = 24) {
+  function candidatesAround(lat, lon, need = 28) {
     const la = Math.floor(lat * 2);
     const lo = Math.floor(lon * 2);
     const out = [];
@@ -266,7 +263,7 @@
   }
 
   function idwTemp(lat, lon) {
-    const cand = candidatesAround(lat, lon, 30);
+    const cand = candidatesAround(lat, lon, 34);
     if (!cand.length) return null;
 
     let num = 0;
@@ -298,34 +295,42 @@
       this._canvas = null;
       this._ctx = null;
       this._raf = 0;
-      this._lastRenderSig = "";
+      this._pending = false;
+      this._lastSig = "";
       this._off = document.createElement("canvas");
+      this._off2 = document.createElement("canvas");
       this._offCtx = this._off.getContext("2d", { willReadFrequently: false });
-      this.opacity = 0.9;
-      this.blurPx = 14;
-      this.gridStep = 8;
-      this.alpha = 0.92;
+      this._off2Ctx = this._off2.getContext("2d", { willReadFrequently: false });
+
+      this.opacity = 0.92;
+      this.blur1 = 10;
+      this.blur2 = 18;
+      this.gridStep = 6;
+      this.alpha = 0.94;
+      this.downscale = 1.7;
     }
-    onAdd(map) {
+
+    onAdd() {
       this._canvas = document.createElement("canvas");
       this._canvas.style.position = "absolute";
       this._canvas.style.top = "0";
       this._canvas.style.left = "0";
       this._canvas.style.pointerEvents = "none";
+      this._canvas.style.opacity = String(this.opacity);
       this._ctx = this._canvas.getContext("2d", { willReadFrequently: false });
 
-      const pane = map.getPanes().overlayPane;
-      pane.appendChild(this._canvas);
+      map.getPanes().overlayPane.appendChild(this._canvas);
 
-      map.on("move", this._schedule, this);
-      map.on("zoom", this._schedule, this);
+      map.on("moveend", this._schedule, this);
+      map.on("zoomend", this._schedule, this);
       map.on("resize", this._schedule, this);
 
-      this._schedule();
+      this._schedule(true);
     }
-    onRemove(map) {
-      map.off("move", this._schedule, this);
-      map.off("zoom", this._schedule, this);
+
+    onRemove() {
+      map.off("moveend", this._schedule, this);
+      map.off("zoomend", this._schedule, this);
       map.off("resize", this._schedule, this);
       if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
       this._canvas = null;
@@ -333,34 +338,41 @@
       if (this._raf) cancelAnimationFrame(this._raf);
       this._raf = 0;
     }
+
     setOpacity(op) {
       this.opacity = op;
       if (this._canvas) this._canvas.style.opacity = String(op);
     }
+
     redraw() {
       this._schedule(true);
     }
+
     _schedule(force = false) {
       if (!this._canvas || !this._ctx) return;
-      if (this._raf) return;
+      if (this._raf) {
+        this._pending = this._pending || force;
+        return;
+      }
+      this._pending = force;
       this._raf = requestAnimationFrame(() => {
+        const f = this._pending;
+        this._pending = false;
         this._raf = 0;
-        this._render(force);
+        this._render(f);
       });
     }
-    _render(force) {
-      if (!this._canvas || !this._ctx) return;
 
+    _render(force) {
       const size = map.getSize();
       const w = size.x;
       const h = size.y;
 
-      const z = map.getZoom();
       const b = map.getBounds();
-      const sig = `${w}x${h}|z${z}|${b.getSouthWest().lat.toFixed(3)},${b.getSouthWest().lng.toFixed(3)}|v${pointsVersion}`;
-
-      if (!force && sig === this._lastRenderSig) return;
-      this._lastRenderSig = sig;
+      const z = map.getZoom();
+      const sig = `${w}x${h}|z${z}|${b.getSouthWest().lat.toFixed(3)},${b.getSouthWest().lng.toFixed(3)}|v${pointsVersion}|g${this.gridStep}|d${this.downscale}`;
+      if (!force && sig === this._lastSig) return;
+      this._lastSig = sig;
 
       this._canvas.width = w;
       this._canvas.height = h;
@@ -368,29 +380,34 @@
       this._canvas.style.height = `${h}px`;
       this._canvas.style.opacity = String(this.opacity);
 
-      const offW = Math.max(260, Math.floor(w / 2.2));
-      const offH = Math.max(260, Math.floor(h / 2.2));
+      const topLeft = map.containerPointToLayerPoint([0, 0]);
+
+      const offW = Math.max(320, Math.floor(w / this.downscale));
+      const offH = Math.max(320, Math.floor(h / this.downscale));
       this._off.width = offW;
       this._off.height = offH;
+      this._off2.width = offW;
+      this._off2.height = offH;
 
       const ctxOff = this._offCtx;
+      const ctxOff2 = this._off2Ctx;
       ctxOff.clearRect(0, 0, offW, offH);
+      ctxOff2.clearRect(0, 0, offW, offH);
 
-      const step = Math.max(4, Math.floor(this.gridStep));
       const img = ctxOff.createImageData(offW, offH);
       const data = img.data;
 
+      const step = Math.max(4, Math.floor(this.gridStep));
       const scaleX = w / offW;
       const scaleY = h / offH;
 
-      for (let y = 0; y < offH; y += 1) {
-        for (let x = 0; x < offW; x += 1) {
-          if ((x % step !== 0) || (y % step !== 0)) continue;
-
+      for (let y = 0; y < offH; y += step) {
+        for (let x = 0; x < offW; x += step) {
           const cx = x * scaleX;
           const cy = y * scaleY;
+          const lp = L.point(topLeft.x + cx, topLeft.y + cy);
+          const ll = map.layerPointToLatLng(lp);
 
-          const ll = map.containerPointToLatLng([cx, cy]);
           const t = idwTemp(ll.lat, ll.lng);
           if (t === null) continue;
 
@@ -414,19 +431,47 @@
 
       ctxOff.putImageData(img, 0, 0);
 
+      if (swedenPaths) {
+        ctxOff.globalCompositeOperation = "destination-in";
+        ctxOff.fillStyle = "#000";
+        ctxOff.beginPath();
+        for (const poly of swedenPaths) {
+          for (const ring of poly.rings) {
+            for (let i = 0; i < ring.length; i++) {
+              const [lng, lat] = ring[i];
+              const lp = map.latLngToLayerPoint([lat, lng]);
+              const cx = (lp.x - topLeft.x) / scaleX;
+              const cy = (lp.y - topLeft.y) / scaleY;
+              if (i === 0) ctxOff.moveTo(cx, cy);
+              else ctxOff.lineTo(cx, cy);
+            }
+            ctxOff.closePath();
+          }
+        }
+        ctxOff.fill("evenodd");
+        ctxOff.globalCompositeOperation = "source-over";
+      }
+
       const ctx = this._ctx;
       ctx.clearRect(0, 0, w, h);
 
       ctx.save();
-      clipSweden(ctx);
+      clipSweden(ctx, topLeft);
 
       ctx.imageSmoothingEnabled = true;
-      ctx.globalAlpha = 1;
-      ctx.filter = `blur(${this.blurPx}px)`;
-      ctx.drawImage(this._off, 0, 0, w, h);
+
+      ctxOff2.filter = `blur(${this.blur1}px)`;
+      ctxOff2.clearRect(0, 0, offW, offH);
+      ctxOff2.drawImage(this._off, 0, 0, offW, offH);
+      ctxOff2.filter = "none";
+
+      ctx.filter = `blur(${this.blur2}px)`;
+      ctx.drawImage(this._off2, 0, 0, offW, offH, 0, 0, w, h);
 
       ctx.filter = "none";
-      ctx.drawImage(this._off, 0, 0, w, h);
+      ctx.globalAlpha = 0.85;
+      ctx.drawImage(this._off2, 0, 0, offW, offH, 0, 0, w, h);
+      ctx.globalAlpha = 1;
 
       ctx.restore();
     }
@@ -498,15 +543,19 @@
     if (showMarkers) {
       if (map.hasLayer(clusterLayer)) map.removeLayer(clusterLayer);
       if (!map.hasLayer(markerLayer)) markerLayer.addTo(map);
-      tempFieldLayer.setOpacity(0.88);
-      tempFieldLayer.gridStep = 6;
-      tempFieldLayer.blurPx = 12;
+      tempFieldLayer.setOpacity(0.90);
+      tempFieldLayer.gridStep = 5;
+      tempFieldLayer.downscale = 1.55;
+      tempFieldLayer.blur1 = 8;
+      tempFieldLayer.blur2 = 14;
     } else {
       if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
       if (!map.hasLayer(clusterLayer)) clusterLayer.addTo(map);
-      tempFieldLayer.setOpacity(0.92);
-      tempFieldLayer.gridStep = 8;
-      tempFieldLayer.blurPx = 16;
+      tempFieldLayer.setOpacity(0.93);
+      tempFieldLayer.gridStep = 6;
+      tempFieldLayer.downscale = 1.7;
+      tempFieldLayer.blur1 = 10;
+      tempFieldLayer.blur2 = 18;
     }
 
     tempFieldLayer.redraw();
@@ -578,10 +627,12 @@
     await loadSwedenGeoJSON();
     await load();
     setInterval(load, 60_000);
+
     map.on("zoomend", () => {
       setLayersForZoom();
       if (map.getZoom() >= 9 && lastPoints.length) buildMarkers(lastPoints);
     });
+
     map.on("moveend", () => {
       tempFieldLayer.redraw();
     });
