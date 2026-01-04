@@ -5,11 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Sverige – Lufttemperatur</title>
 
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    crossorigin=""
-  />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 
   <style>
     html, body { height: 100%; margin: 0; }
@@ -56,24 +54,30 @@
       border-radius: 999px;
       overflow: hidden;
       background: linear-gradient(90deg,
-  #000000 0%,     /* -40 */
-  #002b7f 25%,    /* -20 */
-  #1e6cff 43.75%, /* -5 */
-  #00b050 50%,    /* 0 */
-  #ffd200 75%,    /* +20 */
-  #c00000 100%    /* +40 */
-);
-
-       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
+        #000000 0%,
+        #002b7f 25%,
+        #1e6cff 43.75%,
+        #00b050 50%,
+        #ffd200 75%,
+        #c00000 100%
+      );
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
     }
 
+    .legend-labels.legend-labels-3 {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+    }
 
-    .legend-labels {
-      display: flex;
-      justify-content: space-between;
+    .legend-labels.legend-labels-3 span {
       font-weight: 500;
       opacity: 0.92;
     }
+
+    .legend-labels.legend-labels-3 #legendMin { justify-self: start; }
+    .legend-labels.legend-labels-3 .legend-mid { justify-self: center; }
+    .legend-labels.legend-labels-3 #legendMax { justify-self: end; }
 
     .legend-extremes {
       display: flex;
@@ -83,32 +87,6 @@
       opacity: 0.9;
     }
 
-    .legend-labels-3 {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-}
-
-.legend-labels-3 span {
-  font-weight: 500;
-  opacity: 0.92;
-}
-
-.legend-labels-3 .legend-mid {
-  text-align: center;
-}
-
-    .legend-labels.legend-labels-3 {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-}
-
-.legend-labels.legend-labels-3 #legendMin { justify-self: start; }
-.legend-labels.legend-labels-3 .legend-mid { justify-self: center; }
-.legend-labels.legend-labels-3 #legendMax { justify-self: end; }
-
-    
     .leaflet-container { background: #0b1220; }
   </style>
 </head>
@@ -128,8 +106,6 @@
         <span id="legendMax">+40°C</span>
       </div>
 
-
-      <!-- HÖGST ÖVERST, LÄGST UNDER -->
       <div class="legend-extremes" id="extremes">
         <div id="highest">Högst: –</div>
         <div id="lowest">Lägst: –</div>
@@ -139,7 +115,9 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
   <script src="./weather.js"></script>
 </body>
 </html>
