@@ -1,6 +1,5 @@
 (() => {
   const DATA_URL = "https://weather.etfnordic.workers.dev/api/stations";
-
   const TEMP_MIN = -40;
   const TEMP_MAX = 40;
 
@@ -11,7 +10,6 @@
   const highestEl = document.getElementById("highest");
   const lowestEl = document.getElementById("lowest");
 
-
   if (legendMinEl) legendMinEl.textContent = `${TEMP_MIN}°C`;
   if (legendMaxEl) legendMaxEl.textContent = `+${TEMP_MAX}°C`;
 
@@ -21,8 +19,6 @@
     maxZoom: 18,
     attribution: "&copy; OpenStreetMap",
   }).addTo(map);
-
-  const layer = L.layerGroup().addTo(map);
 
   function clamp(x, a, b) {
     return Math.min(b, Math.max(a, x));
@@ -54,15 +50,13 @@
   }
 
   const COLOR_STOPS = [
-  { t: 0.00,   r: 0,   g: 0,   b: 0   }, // -40 svart
-  { t: 0.25,   r: 0,   g: 43,  b: 127 }, // -20 mörkblå
-  { t: 0.4375, r: 30,  g: 108, b: 255 }, // -5 blå
-  { t: 0.50,   r: 0,   g: 176, b: 80  }, // 0 grön
-  { t: 0.75,   r: 255, g: 210, b: 0   }, // +20 gul
-  { t: 1.00,   r: 192, g: 0,   b: 0   }, // +40 röd
-];
-
-
+    { t: 0.00, r: 0, g: 0, b: 0 },
+    { t: 0.25, r: 0, g: 43, b: 127 },
+    { t: 0.4375, r: 30, g: 108, b: 255 },
+    { t: 0.50, r: 0, g: 176, b: 80 },
+    { t: 0.75, r: 255, g: 210, b: 0 },
+    { t: 1.00, r: 192, g: 0, b: 0 },
+  ];
 
   function colorForTemp(temp) {
     const t = (temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN);
@@ -120,13 +114,11 @@
   function makeTempDivIcon(temp, color, size) {
     const text = fmtTempLabel(temp);
     const fontSize = fontSizeForMarker(size);
-
     const html = `
       <div style="
         width:${size}px;height:${size}px;
         border-radius:999px;
         background:${color};
-        border:0;
         display:flex;
         align-items:center;
         justify-content:center;
@@ -140,24 +132,119 @@
         line-height:1;
       ">${escapeHtml(text)}</div>
     `;
-
-    return L.divIcon({
+    const icon = L.divIcon({
       className: "",
       html,
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2],
       popupAnchor: [0, -size / 2],
     });
+    icon._temp = temp;
+    return icon;
   }
 
+  function heatWeight(temp) {
+    return clamp((temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN), 0, 1);
+  }
+
+  const markerLayer = L.layerGroup();
+
+  const clusterLayer = L.markerClusterGroup({
+    disableClusteringAtZoom: 9,
+    spiderfyOnMaxZoom: true,
+    showCoverageOnHover: false,
+    iconCreateFunction: function (cluster) {
+      const ms = cluster.getAllChildMarkers();
+      let sum = 0, n = 0;
+      for (const m of ms) {
+        const t = Number(m?.options?.icon?._temp);
+        if (Number.isFinite(t)) { sum += t; n++; }
+      }
+      const avg = n ? sum / n : 0;
+      const color = colorForTemp(avg);
+      const count = cluster.getChildCount();
+      const html = `
+        <div style="
+          width:40px;height:40px;border-radius:999px;
+          background:${color};
+          display:flex;align-items:center;justify-content:center;
+          color:#fff;font-weight:700;
+          box-shadow:0 10px 22px rgba(0,0,0,0.28);
+          text-shadow:0 1px 2px rgba(0,0,0,0.65);
+          user-select:none;
+        ">${count}</div>
+      `;
+      return L.divIcon({ html, className: "", iconSize: [40, 40] });
+    },
+  });
+
+  let heatLayer = null;
   let lastPoints = [];
 
-  function render(points) {
-    lastPoints = points;
-    layer.clearLayers();
+  function popupHtml(p) {
+    return `
+      <div style="font: 14px/1.25 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
+        <div><strong>${escapeHtml(p.name ?? "Station")}</strong></div>
+        <div>Temp: <strong>${escapeHtml(String(p.airTemp))}°C</strong></div>
+        <div style="opacity:.75;margin-top:4px;">${escapeHtml(fmtTimeHHMM(p.updatedAt))}</div>
+      </div>
+    `;
+  }
 
+  function buildHeat(points) {
+    const heatPoints = [];
+    for (const p of points) {
+      const temp = Number(p.airTemp);
+      if (!Number.isFinite(temp)) continue;
+      heatPoints.push([p.lat, p.lon, heatWeight(temp)]);
+    }
+    if (heatLayer) map.removeLayer(heatLayer);
+    heatLayer = L.heatLayer(heatPoints, { radius: 22, blur: 18, maxZoom: 9 });
+  }
+
+  function buildClusters(points) {
+    clusterLayer.clearLayers();
+    for (const p of points) {
+      const temp = Number(p.airTemp);
+      if (!Number.isFinite(temp)) continue;
+      const icon = makeTempDivIcon(temp, colorForTemp(temp), 18);
+      const m = L.marker([p.lat, p.lon], { icon });
+      m.bindPopup(popupHtml(p));
+      clusterLayer.addLayer(m);
+    }
+  }
+
+  function buildMarkers(points) {
+    markerLayer.clearLayers();
     const size = markerSizeForZoom(map.getZoom());
+    for (const p of points) {
+      const temp = Number(p.airTemp);
+      if (!Number.isFinite(temp)) continue;
+      const icon = makeTempDivIcon(temp, colorForTemp(temp), size);
+      const m = L.marker([p.lat, p.lon], { icon });
+      m.bindPopup(popupHtml(p));
+      markerLayer.addLayer(m);
+    }
+  }
 
+  function setLayersForZoom() {
+    const z = map.getZoom();
+    const showMarkers = z >= 9;
+
+    if (!heatLayer) return;
+
+    if (showMarkers) {
+      if (map.hasLayer(heatLayer)) map.removeLayer(heatLayer);
+      if (map.hasLayer(clusterLayer)) map.removeLayer(clusterLayer);
+      if (!map.hasLayer(markerLayer)) markerLayer.addTo(map);
+    } else {
+      if (!map.hasLayer(heatLayer)) heatLayer.addTo(map);
+      if (!map.hasLayer(clusterLayer)) clusterLayer.addTo(map);
+      if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
+    }
+  }
+
+  function updateStatus(points) {
     let newest = null;
     let minP = null;
     let maxP = null;
@@ -173,34 +260,29 @@
         const d = new Date(p.updatedAt);
         if (!isNaN(d) && (!newest || d > newest)) newest = d;
       }
-
-      const icon = makeTempDivIcon(temp, colorForTemp(temp), size);
-      const m = L.marker([p.lat, p.lon], { icon });
-
-      const popup = `
-        <div style="font: 14px/1.25 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
-          <div><strong>${escapeHtml(p.name ?? "Station")}</strong></div>
-          <div>Temp: <strong>${escapeHtml(String(p.airTemp))}°C</strong></div>
-          <div style="opacity:.75;margin-top:4px;">${escapeHtml(fmtTimeHHMM(p.updatedAt))}</div>
-        </div>
-      `;
-
-      m.bindPopup(popup);
-      m.addTo(layer);
     }
 
     if (highestEl && lowestEl) {
       if (minP && maxP) {
         highestEl.textContent = `Högst: ${maxP.airTemp}°C – ${maxP.name}`;
-        lowestEl.textContent  = `Lägst: ${minP.airTemp}°C – ${minP.name}`;
+        lowestEl.textContent = `Lägst: ${minP.airTemp}°C – ${minP.name}`;
       } else {
         highestEl.textContent = "Högst: –";
-        lowestEl.textContent  = "Lägst: –";
+        lowestEl.textContent = "Lägst: –";
       }
     }
 
     const newestText = newest ? ` • Senaste mätning: ${fmtNewest(newest)}` : "";
     if (statusEl) statusEl.textContent = `Stationer: ${points.length}${newestText}`;
+  }
+
+  function render(points) {
+    lastPoints = points;
+    buildHeat(points);
+    buildClusters(points);
+    buildMarkers(points);
+    setLayersForZoom();
+    updateStatus(points);
   }
 
   async function load() {
@@ -224,7 +306,8 @@
   map.on("zoomend", () => {
     clearTimeout(zoomTimer);
     zoomTimer = setTimeout(() => {
-      if (lastPoints.length) render(lastPoints);
-    }, 80);
+      setLayersForZoom();
+      if (map.getZoom() >= 9 && lastPoints.length) buildMarkers(lastPoints);
+    }, 60);
   });
 })();
