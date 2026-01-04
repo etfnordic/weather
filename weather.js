@@ -6,7 +6,6 @@
   const legendMinEl = document.getElementById("legendMin");
   const legendMaxEl = document.getElementById("legendMax");
   const statusEl = document.getElementById("status");
-  const extremesEl = document.getElementById("extremes");
   const highestEl = document.getElementById("highest");
   const lowestEl = document.getElementById("lowest");
 
@@ -72,10 +71,6 @@
       .replaceAll("'", "&#039;");
   }
 
-  function fmtTempLabel(temp) {
-    return `${Math.round(temp)}`;
-  }
-
   function fmtTimeHHMM(iso) {
     if (!iso) return "";
     const d = new Date(iso);
@@ -112,7 +107,7 @@
   }
 
   function makeTempDivIcon(temp, color, size) {
-    const text = fmtTempLabel(temp);
+    const text = `${Math.round(temp)}`;
     const fontSize = fontSizeForMarker(size);
     const html = `
       <div style="
@@ -143,10 +138,6 @@
     return icon;
   }
 
-  function heatWeight(temp) {
-    return clamp((temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN), 0, 1);
-  }
-
   const markerLayer = L.layerGroup();
 
   const clusterLayer = L.markerClusterGroup({
@@ -156,25 +147,29 @@
     iconCreateFunction: function (cluster) {
       const ms = cluster.getAllChildMarkers();
       let sum = 0, n = 0;
+
       for (const m of ms) {
         const t = Number(m?.options?.icon?._temp);
         if (Number.isFinite(t)) { sum += t; n++; }
       }
+
       const avg = n ? sum / n : 0;
+      const label = Math.round(avg);
       const color = colorForTemp(avg);
-      const count = cluster.getChildCount();
+
       const html = `
         <div style="
-          width:40px;height:40px;border-radius:999px;
+          width:44px;height:44px;border-radius:999px;
           background:${color};
           display:flex;align-items:center;justify-content:center;
-          color:#fff;font-weight:700;
+          color:#fff;font-weight:700;font-size:14px;
           box-shadow:0 10px 22px rgba(0,0,0,0.28);
           text-shadow:0 1px 2px rgba(0,0,0,0.65);
           user-select:none;
-        ">${count}</div>
+        ">${label}°</div>
       `;
-      return L.divIcon({ html, className: "", iconSize: [40, 40] });
+
+      return L.divIcon({ html, className: "", iconSize: [44, 44] });
     },
   });
 
@@ -193,13 +188,31 @@
 
   function buildHeat(points) {
     const heatPoints = [];
+
     for (const p of points) {
       const temp = Number(p.airTemp);
       if (!Number.isFinite(temp)) continue;
-      heatPoints.push([p.lat, p.lon, heatWeight(temp)]);
+
+      const tNorm = clamp((temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN), 0, 1);
+      heatPoints.push([p.lat, p.lon, tNorm]);
     }
+
     if (heatLayer) map.removeLayer(heatLayer);
-    heatLayer = L.heatLayer(heatPoints, { radius: 22, blur: 18, maxZoom: 9 });
+
+    heatLayer = L.heatLayer(heatPoints, {
+      radius: 35,
+      blur: 28,
+      maxZoom: 8,
+      minOpacity: 0.35,
+      gradient: {
+        0.00: "#000000",
+        0.25: "#002b7f",
+        0.44: "#1e6cff",
+        0.50: "#00b050",
+        0.75: "#ffd200",
+        1.00: "#c00000",
+      },
+    });
   }
 
   function buildClusters(points) {
@@ -295,7 +308,8 @@
     } catch (e) {
       console.error(e);
       if (statusEl) statusEl.textContent = "Kunde inte hämta data (kolla console).";
-      if (extremesEl) extremesEl.textContent = "Lägst: –  •  Högst: –";
+      if (highestEl) highestEl.textContent = "Högst: –";
+      if (lowestEl) lowestEl.textContent = "Lägst: –";
     }
   }
 
