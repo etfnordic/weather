@@ -4,6 +4,7 @@
 
   const TEMP_MIN = -40;
   const TEMP_MAX = 40;
+
   const legendMinEl = document.getElementById("legendMin");
   const legendMaxEl = document.getElementById("legendMax");
   const statusEl = document.getElementById("status");
@@ -294,7 +295,8 @@
       this.alpha = 0.80;
       this.downscale = 1.8;
 
-      this._topLeftLayer = L.point(0, 0);
+      this._posRaf = 0;
+      this._layerTopLeft = L.point(0, 0);
     }
 
     onAdd() {
@@ -308,21 +310,30 @@
 
       map.getPanes().overlayPane.appendChild(this._canvas);
 
-      map.on("move", this._schedule, this);
-      map.on("zoom", this._schedule, this);
-      map.on("resize", this._schedule, this);
+      this._resetSize();
 
-      this._reset(true);
+      map.on("move", this._updatePositionFast, this);
+      map.on("moveend", this._schedule, this);
+      map.on("zoomend", this._onZoomEnd, this);
+      map.on("resize", this._onResize, this);
+
+      this._updatePosition();
+      this._schedule(true);
     }
 
     onRemove() {
-      map.off("move", this._schedule, this);
-      map.off("zoom", this._schedule, this);
-      map.off("resize", this._schedule, this);
+      map.off("move", this._updatePositionFast, this);
+      map.off("moveend", this._schedule, this);
+      map.off("zoomend", this._onZoomEnd, this);
+      map.off("resize", this._onResize, this);
+
+      if (this._posRaf) cancelAnimationFrame(this._posRaf);
+      this._posRaf = 0;
 
       if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
       this._canvas = null;
       this._ctx = null;
+
       if (this._raf) cancelAnimationFrame(this._raf);
       this._raf = 0;
     }
@@ -336,24 +347,42 @@
       this._schedule(true);
     }
 
-    _reset(force) {
-      if (!this._canvas || !this._ctx) return;
+    _onResize() {
+      this._resetSize();
+      this._updatePosition();
+      this._schedule(true);
+    }
 
+    _onZoomEnd() {
+      this._resetSize();
+      this._updatePosition();
+      this._schedule(true);
+    }
+
+    _resetSize() {
+      if (!this._canvas) return;
       const size = map.getSize();
       const w = size.x;
       const h = size.y;
-
-      this._topLeftLayer = map.containerPointToLayerPoint([0, 0]);
-
       this._canvas.width = w;
       this._canvas.height = h;
       this._canvas.style.width = `${w}px`;
       this._canvas.style.height = `${h}px`;
       this._canvas.style.opacity = String(this.opacity);
+    }
 
-      L.DomUtil.setPosition(this._canvas, this._topLeftLayer);
+    _updatePositionFast() {
+      if (this._posRaf) return;
+      this._posRaf = requestAnimationFrame(() => {
+        this._posRaf = 0;
+        this._updatePosition();
+      });
+    }
 
-      this._schedule(force);
+    _updatePosition() {
+      if (!this._canvas) return;
+      this._layerTopLeft = map.containerPointToLayerPoint([0, 0]);
+      L.DomUtil.setPosition(this._canvas, this._layerTopLeft);
     }
 
     _schedule(force = false) {
@@ -425,11 +454,10 @@
       if (!force && sig === this._lastSig) return;
       this._lastSig = sig;
 
-      this._topLeftLayer = map.containerPointToLayerPoint([0, 0]);
-      L.DomUtil.setPosition(this._canvas, this._topLeftLayer);
+      this._updatePosition();
 
-      const offW = Math.max(320, Math.floor(w / this.downscale));
-      const offH = Math.max(320, Math.floor(h / this.downscale));
+      const offW = Math.max(280, Math.floor(w / this.downscale));
+      const offH = Math.max(280, Math.floor(h / this.downscale));
       this._off.width = offW;
       this._off.height = offH;
       this._off2.width = offW;
@@ -571,7 +599,7 @@
       if (!map.hasLayer(markerLayer)) markerLayer.addTo(map);
       tempFieldLayer.setOpacity(0.75);
       tempFieldLayer.gridStep = 5;
-      tempFieldLayer.downscale = 1.55;
+      tempFieldLayer.downscale = 1.65;
       tempFieldLayer.blur1 = 8;
       tempFieldLayer.blur2 = 14;
     } else {
@@ -579,7 +607,7 @@
       if (!map.hasLayer(clusterLayer)) clusterLayer.addTo(map);
       tempFieldLayer.setOpacity(0.72);
       tempFieldLayer.gridStep = 6;
-      tempFieldLayer.downscale = 1.8;
+      tempFieldLayer.downscale = 1.9;
       tempFieldLayer.blur1 = 10;
       tempFieldLayer.blur2 = 20;
     }
