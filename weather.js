@@ -282,12 +282,6 @@
       this._raf = 0;
       this._pending = false;
       this._lastSig = "";
-      this._topLeft = L.point(0, 0);
-      this._zoom = null;
-      this._center = null;
-
-      this._paneBase = null;
-      this._panRaf = 0;
 
       this._off = document.createElement("canvas");
       this._off2 = document.createElement("canvas");
@@ -300,11 +294,12 @@
       this.gridStep = 6;
       this.alpha = 0.80;
       this.downscale = 1.8;
+
+      this._topLeft = L.point(0, 0);
     }
 
     onAdd() {
       this._canvas = document.createElement("canvas");
-      this._canvas.className = "leaflet-zoom-animated";
       this._canvas.style.position = "absolute";
       this._canvas.style.top = "0";
       this._canvas.style.left = "0";
@@ -314,61 +309,23 @@
 
       map.getPanes().overlayPane.appendChild(this._canvas);
 
-      map.on("movestart", this._panStart, this);
-      map.on("move", this._panMove, this);
-      map.on("moveend", this._panEnd, this);
+      map.on("move", this._schedule, this);
+      map.on("zoom", this._schedule, this);
+      map.on("resize", this._schedule, this);
 
-      map.on("zoomend", this._reset, this);
-      map.on("resize", this._reset, this);
-      map.on("zoomanim", this._animateZoom, this);
-
-      this._reset();
+      this._reset(true);
     }
 
     onRemove() {
-      map.off("movestart", this._panStart, this);
-      map.off("move", this._panMove, this);
-      map.off("moveend", this._panEnd, this);
-
-      map.off("zoomend", this._reset, this);
-      map.off("resize", this._reset, this);
-      map.off("zoomanim", this._animateZoom, this);
-
-      if (this._panRaf) cancelAnimationFrame(this._panRaf);
-      this._panRaf = 0;
+      map.off("move", this._schedule, this);
+      map.off("zoom", this._schedule, this);
+      map.off("resize", this._schedule, this);
 
       if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
       this._canvas = null;
       this._ctx = null;
       if (this._raf) cancelAnimationFrame(this._raf);
       this._raf = 0;
-    }
-
-    _panStart() {
-      this._paneBase = map._getMapPanePos().clone();
-      if (this._canvas) {
-        L.DomUtil.setPosition(this._canvas, L.point(-this._paneBase.x, -this._paneBase.y));
-        this._canvas.style.transform = "";
-      }
-    }
-
-    _panMove() {
-      if (!this._canvas || !this._paneBase) return;
-      if (this._panRaf) return;
-      this._panRaf = requestAnimationFrame(() => {
-        this._panRaf = 0;
-        const cur = map._getMapPanePos();
-        const dx = cur.x - this._paneBase.x;
-        const dy = cur.y - this._paneBase.y;
-        L.DomUtil.setTransform(this._canvas, L.point(dx, dy), 1);
-      });
-    }
-
-    _panEnd() {
-      this._paneBase = null;
-      if (this._panRaf) cancelAnimationFrame(this._panRaf);
-      this._panRaf = 0;
-      this._reset();
     }
 
     setOpacity(op) {
@@ -380,46 +337,24 @@
       this._schedule(true);
     }
 
-    _reset() {
+    _reset(force) {
       if (!this._canvas || !this._ctx) return;
 
       const size = map.getSize();
-      this._canvas.width = size.x;
-      this._canvas.height = size.y;
-      this._canvas.style.width = `${size.x}px`;
-      this._canvas.style.height = `${size.y}px`;
+      const w = size.x;
+      const h = size.y;
+
+      this._topLeft = map.getPixelBounds().min;
+
+      this._canvas.width = w;
+      this._canvas.height = h;
+      this._canvas.style.width = `${w}px`;
+      this._canvas.style.height = `${h}px`;
       this._canvas.style.opacity = String(this.opacity);
 
-      const panePos = map._getMapPanePos();
-      L.DomUtil.setPosition(this._canvas, L.point(-panePos.x, -panePos.y));
-      this._canvas.style.transform = "";
+      L.DomUtil.setPosition(this._canvas, this._topLeft);
 
-      this._topLeft = map.containerPointToLayerPoint([0, 0]);
-
-      this._zoom = map.getZoom();
-      this._center = map.getCenter();
-
-      this._schedule(true);
-    }
-
-    _animateZoom(e) {
-      if (!this._canvas) return;
-
-      const scale = map.getZoomScale(e.zoom, this._zoom);
-      const position = L.DomUtil.getPosition(this._canvas);
-      const viewHalf = map.getSize().multiplyBy(0.5);
-
-      const currentCenterPoint = map.project(this._center, e.zoom);
-      const destCenterPoint = map.project(e.center, e.zoom);
-      const centerOffset = destCenterPoint.subtract(currentCenterPoint);
-
-      const topLeftOffset = viewHalf
-        .multiplyBy(-scale)
-        .add(position)
-        .add(viewHalf)
-        .subtract(centerOffset);
-
-      L.DomUtil.setTransform(this._canvas, topLeftOffset, scale);
+      this._schedule(force);
     }
 
     _schedule(force = false) {
@@ -483,14 +418,18 @@
     _render(force) {
       if (!this._canvas || !this._ctx) return;
 
-      const w = this._canvas.width;
-      const h = this._canvas.height;
+      const size = map.getSize();
+      const w = size.x;
+      const h = size.y;
 
       const b = map.getBounds();
       const z = map.getZoom();
       const sig = `${w}x${h}|z${z}|${b.getSouthWest().lat.toFixed(3)},${b.getSouthWest().lng.toFixed(3)}|v${pointsVersion}|g${this.gridStep}|d${this.downscale}|b${this.blur1},${this.blur2}`;
       if (!force && sig === this._lastSig) return;
       this._lastSig = sig;
+
+      this._topLeft = map.getPixelBounds().min;
+      L.DomUtil.setPosition(this._canvas, this._topLeft);
 
       const offW = Math.max(320, Math.floor(w / this.downscale));
       const offH = Math.max(320, Math.floor(h / this.downscale));
@@ -513,12 +452,10 @@
 
       for (let y = 0; y < offH; y += step) {
         for (let x = 0; x < offW; x += step) {
-          const cx = x * scaleX;
-          const cy = y * scaleY;
+          const px = this._topLeft.x + x * scaleX;
+          const py = this._topLeft.y + y * scaleY;
 
-          const lp = L.point(this._topLeft.x + cx, this._topLeft.y + cy);
-          const ll = map.layerPointToLatLng(lp);
-
+          const ll = map.layerPointToLatLng([px, py]);
           const t = idwTemp(ll.lat, ll.lng);
           if (t === null) continue;
 
@@ -527,10 +464,10 @@
 
           for (let yy = 0; yy < step; yy++) {
             for (let xx = 0; xx < step; xx++) {
-              const px = x + xx;
-              const py = y + yy;
-              if (px >= offW || py >= offH) continue;
-              const idx = (py * offW + px) * 4;
+              const sx = x + xx;
+              const sy = y + yy;
+              if (sx >= offW || sy >= offH) continue;
+              const idx = (sy * offW + sx) * 4;
               data[idx] = c.r;
               data[idx + 1] = c.g;
               data[idx + 2] = c.b;
@@ -726,6 +663,10 @@
     });
 
     map.on("moveend", () => {
+      tempFieldLayer.redraw();
+    });
+
+    map.on("resize", () => {
       tempFieldLayer.redraw();
     });
   })();
