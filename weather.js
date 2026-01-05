@@ -285,7 +285,9 @@
       this._topLeft = L.point(0, 0);
       this._zoom = null;
       this._center = null;
-      this._posRaf = 0;
+
+      this._paneBase = null;
+      this._panRaf = 0;
 
       this._off = document.createElement("canvas");
       this._off2 = document.createElement("canvas");
@@ -312,26 +314,28 @@
 
       map.getPanes().overlayPane.appendChild(this._canvas);
 
-      map.on("move", this._syncDuringPan, this);
-      map.on("moveend", this._reset, this);
+      map.on("movestart", this._panStart, this);
+      map.on("move", this._panMove, this);
+      map.on("moveend", this._panEnd, this);
+
       map.on("zoomend", this._reset, this);
       map.on("resize", this._reset, this);
       map.on("zoomanim", this._animateZoom, this);
-      map.on("movestart", this._invalidateSig, this);
 
       this._reset();
     }
 
     onRemove() {
-      map.off("move", this._syncDuringPan, this);
-      map.off("moveend", this._reset, this);
+      map.off("movestart", this._panStart, this);
+      map.off("move", this._panMove, this);
+      map.off("moveend", this._panEnd, this);
+
       map.off("zoomend", this._reset, this);
       map.off("resize", this._reset, this);
       map.off("zoomanim", this._animateZoom, this);
-      map.off("movestart", this._invalidateSig, this);
 
-      if (this._posRaf) cancelAnimationFrame(this._posRaf);
-      this._posRaf = 0;
+      if (this._panRaf) cancelAnimationFrame(this._panRaf);
+      this._panRaf = 0;
 
       if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
       this._canvas = null;
@@ -340,19 +344,31 @@
       this._raf = 0;
     }
 
-    _invalidateSig() {
-      this._lastSig = "";
+    _panStart() {
+      this._paneBase = map._getMapPanePos().clone();
+      if (this._canvas) {
+        L.DomUtil.setPosition(this._canvas, L.point(-this._paneBase.x, -this._paneBase.y));
+        this._canvas.style.transform = "";
+      }
     }
 
-    _syncDuringPan() {
-      if (!this._canvas) return;
-      if (this._posRaf) return;
-      this._posRaf = requestAnimationFrame(() => {
-        this._posRaf = 0;
-        this._topLeft = map.containerPointToLayerPoint([0, 0]);
-        L.DomUtil.setPosition(this._canvas, this._topLeft);
-        this._canvas.style.transform = "";
+    _panMove() {
+      if (!this._canvas || !this._paneBase) return;
+      if (this._panRaf) return;
+      this._panRaf = requestAnimationFrame(() => {
+        this._panRaf = 0;
+        const cur = map._getMapPanePos();
+        const dx = cur.x - this._paneBase.x;
+        const dy = cur.y - this._paneBase.y;
+        L.DomUtil.setTransform(this._canvas, L.point(dx, dy), 1);
       });
+    }
+
+    _panEnd() {
+      this._paneBase = null;
+      if (this._panRaf) cancelAnimationFrame(this._panRaf);
+      this._panRaf = 0;
+      this._reset();
     }
 
     setOpacity(op) {
@@ -374,12 +390,14 @@
       this._canvas.style.height = `${size.y}px`;
       this._canvas.style.opacity = String(this.opacity);
 
+      const panePos = map._getMapPanePos();
+      L.DomUtil.setPosition(this._canvas, L.point(-panePos.x, -panePos.y));
+      this._canvas.style.transform = "";
+
       this._topLeft = map.containerPointToLayerPoint([0, 0]);
-      L.DomUtil.setPosition(this._canvas, this._topLeft);
 
       this._zoom = map.getZoom();
       this._center = map.getCenter();
-      this._canvas.style.transform = "";
 
       this._schedule(true);
     }
