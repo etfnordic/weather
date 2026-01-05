@@ -285,6 +285,7 @@
       this._topLeft = L.point(0, 0);
       this._zoom = null;
       this._center = null;
+      this._posRaf = 0;
 
       this._off = document.createElement("canvas");
       this._off2 = document.createElement("canvas");
@@ -311,6 +312,7 @@
 
       map.getPanes().overlayPane.appendChild(this._canvas);
 
+      map.on("move", this._syncDuringPan, this);
       map.on("moveend", this._reset, this);
       map.on("zoomend", this._reset, this);
       map.on("resize", this._reset, this);
@@ -321,11 +323,15 @@
     }
 
     onRemove() {
+      map.off("move", this._syncDuringPan, this);
       map.off("moveend", this._reset, this);
       map.off("zoomend", this._reset, this);
       map.off("resize", this._reset, this);
       map.off("zoomanim", this._animateZoom, this);
       map.off("movestart", this._invalidateSig, this);
+
+      if (this._posRaf) cancelAnimationFrame(this._posRaf);
+      this._posRaf = 0;
 
       if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
       this._canvas = null;
@@ -336,6 +342,17 @@
 
     _invalidateSig() {
       this._lastSig = "";
+    }
+
+    _syncDuringPan() {
+      if (!this._canvas) return;
+      if (this._posRaf) return;
+      this._posRaf = requestAnimationFrame(() => {
+        this._posRaf = 0;
+        this._topLeft = map.containerPointToLayerPoint([0, 0]);
+        L.DomUtil.setPosition(this._canvas, this._topLeft);
+        this._canvas.style.transform = "";
+      });
     }
 
     setOpacity(op) {
