@@ -295,7 +295,7 @@
       this.alpha = 0.80;
       this.downscale = 1.8;
 
-      this._topLeft = L.point(0, 0);
+      this._topLeftLayer = L.point(0, 0);
     }
 
     onAdd() {
@@ -344,7 +344,7 @@
       const w = size.x;
       const h = size.y;
 
-      this._topLeft = map.getPixelBounds().min;
+      this._topLeftLayer = map.containerPointToLayerPoint([0, 0]);
 
       this._canvas.width = w;
       this._canvas.height = h;
@@ -352,7 +352,7 @@
       this._canvas.style.height = `${h}px`;
       this._canvas.style.opacity = String(this.opacity);
 
-      L.DomUtil.setPosition(this._canvas, this._topLeft);
+      L.DomUtil.setPosition(this._canvas, this._topLeftLayer);
 
       this._schedule(force);
     }
@@ -379,11 +379,9 @@
         for (const ring of poly.rings) {
           for (let i = 0; i < ring.length; i++) {
             const [lng, lat] = ring[i];
-            const lp = map.latLngToLayerPoint([lat, lng]);
-            const x = lp.x - this._topLeft.x;
-            const y = lp.y - this._topLeft.y;
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
+            const pt = map.latLngToContainerPoint([lat, lng]);
+            if (i === 0) ctx.moveTo(pt.x, pt.y);
+            else ctx.lineTo(pt.x, pt.y);
           }
           ctx.closePath();
         }
@@ -401,9 +399,9 @@
         for (const ring of poly.rings) {
           for (let i = 0; i < ring.length; i++) {
             const [lng, lat] = ring[i];
-            const lp = map.latLngToLayerPoint([lat, lng]);
-            const x = (lp.x - this._topLeft.x) / scaleX;
-            const y = (lp.y - this._topLeft.y) / scaleY;
+            const pt = map.latLngToContainerPoint([lat, lng]);
+            const x = pt.x / scaleX;
+            const y = pt.y / scaleY;
             if (i === 0) ctxOff.moveTo(x, y);
             else ctxOff.lineTo(x, y);
           }
@@ -428,8 +426,8 @@
       if (!force && sig === this._lastSig) return;
       this._lastSig = sig;
 
-      this._topLeft = map.getPixelBounds().min;
-      L.DomUtil.setPosition(this._canvas, this._topLeft);
+      this._topLeftLayer = map.containerPointToLayerPoint([0, 0]);
+      L.DomUtil.setPosition(this._canvas, this._topLeftLayer);
 
       const offW = Math.max(320, Math.floor(w / this.downscale));
       const offH = Math.max(320, Math.floor(h / this.downscale));
@@ -452,10 +450,10 @@
 
       for (let y = 0; y < offH; y += step) {
         for (let x = 0; x < offW; x += step) {
-          const px = this._topLeft.x + x * scaleX;
-          const py = this._topLeft.y + y * scaleY;
+          const cx = x * scaleX;
+          const cy = y * scaleY;
 
-          const ll = map.layerPointToLatLng([px, py]);
+          const ll = map.containerPointToLatLng([cx, cy]);
           const t = idwTemp(ll.lat, ll.lng);
           if (t === null) continue;
 
@@ -464,10 +462,10 @@
 
           for (let yy = 0; yy < step; yy++) {
             for (let xx = 0; xx < step; xx++) {
-              const sx = x + xx;
-              const sy = y + yy;
-              if (sx >= offW || sy >= offH) continue;
-              const idx = (sy * offW + sx) * 4;
+              const px = x + xx;
+              const py = y + yy;
+              if (px >= offW || py >= offH) continue;
+              const idx = (py * offW + px) * 4;
               data[idx] = c.r;
               data[idx + 1] = c.g;
               data[idx + 2] = c.b;
