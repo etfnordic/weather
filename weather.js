@@ -4,7 +4,6 @@
 
   const TEMP_MIN = -40;
   const TEMP_MAX = 40;
-
   const legendMinEl = document.getElementById("legendMin");
   const legendMaxEl = document.getElementById("legendMax");
   const statusEl = document.getElementById("status");
