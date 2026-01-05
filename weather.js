@@ -129,7 +129,7 @@
         align-items:center;
         justify-content:center;
         color:#fff;
-        font-weight:900;
+        font-weight:700;
         font-size:${fontSize}px;
         font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
         box-shadow:0 10px 22px rgba(0,0,0,0.28);
@@ -284,6 +284,7 @@
       this._lastSig = "";
       this._topLeft = L.point(0, 0);
       this._zoom = null;
+      this._center = null;
 
       this._off = document.createElement("canvas");
       this._off2 = document.createElement("canvas");
@@ -309,8 +310,8 @@
       this._ctx = this._canvas.getContext("2d", { willReadFrequently: false });
 
       map.getPanes().overlayPane.appendChild(this._canvas);
-      this._zoom = map.getZoom();
 
+      map.on("move", this._updatePosition, this);
       map.on("moveend", this._reset, this);
       map.on("zoomend", this._reset, this);
       map.on("resize", this._reset, this);
@@ -320,6 +321,7 @@
     }
 
     onRemove() {
+      map.off("move", this._updatePosition, this);
       map.off("moveend", this._reset, this);
       map.off("zoomend", this._reset, this);
       map.off("resize", this._reset, this);
@@ -341,8 +343,15 @@
       this._schedule(true);
     }
 
+    _updatePosition() {
+      if (!this._canvas) return;
+      this._topLeft = map.containerPointToLayerPoint([0, 0]);
+      L.DomUtil.setPosition(this._canvas, this._topLeft);
+    }
+
     _reset() {
       if (!this._canvas || !this._ctx) return;
+
       const size = map.getSize();
       this._canvas.width = size.x;
       this._canvas.height = size.y;
@@ -354,6 +363,7 @@
       L.DomUtil.setPosition(this._canvas, this._topLeft);
 
       this._zoom = map.getZoom();
+      this._center = map.getCenter();
       this._canvas.style.transform = "";
 
       this._schedule(true);
@@ -363,13 +373,16 @@
       if (!this._canvas) return;
 
       const scale = map.getZoomScale(e.zoom, this._zoom);
+      const position = L.DomUtil.getPosition(this._canvas);
       const viewHalf = map.getSize().multiplyBy(0.5);
-      const currentCenterPoint = map.project(map.getCenter(), e.zoom);
+
+      const currentCenterPoint = map.project(this._center, e.zoom);
       const destCenterPoint = map.project(e.center, e.zoom);
       const centerOffset = destCenterPoint.subtract(currentCenterPoint);
 
-      const topLeftOffset = viewHalf.multiplyBy(-scale)
-        .add(L.DomUtil.getPosition(this._canvas))
+      const topLeftOffset = viewHalf
+        .multiplyBy(-scale)
+        .add(position)
         .add(viewHalf)
         .subtract(centerOffset);
 
@@ -547,7 +560,7 @@
           width:44px;height:44px;border-radius:999px;
           background:${color};
           display:flex;align-items:center;justify-content:center;
-          color:#fff;font-weight:900;font-size:14px;
+          color:#fff;font-weight:700;font-size:13px;
           box-shadow:0 10px 22px rgba(0,0,0,0.28);
           text-shadow:0 1px 2px rgba(0,0,0,0.65);
           user-select:none;
