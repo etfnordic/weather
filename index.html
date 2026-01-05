@@ -3,121 +3,98 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Sverige – Lufttemperatur</title>
+  <title>Lufttemperatur i Sverige – live</title>
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <link rel="stylesheet" href="./styles.css" />
 
-  <style>
-    html, body { height: 100%; margin: 0; }
-    #map { height: 100%; }
-
-    .panel {
-      position: absolute;
-      top: 12px;
-      right: 12px;
-      z-index: 1000;
-      background: rgba(0,0,0,0.78);
-      color: #fff;
-      padding: 14px 16px;
-      border-radius: 16px;
-      font: 14px/1.25 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      max-width: 420px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
-      backdrop-filter: blur(6px);
-    }
-
-    .title {
-      font-weight: 700;
-      font-size: 22px;
-      letter-spacing: 0.2px;
-    }
-
-    .muted {
-      opacity: 0.88;
-      font-size: 14px;
-      margin-top: 6px;
-      font-weight: 400;
-    }
-
-    .legend {
-      margin-top: 12px;
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 10px;
-      font-size: 14px;
-    }
-
-    .bar {
-      height: 12px;
-      border-radius: 999px;
-      overflow: hidden;
-      background: linear-gradient(90deg,
-        #000000 0%,
-        #002b7f 25%,
-        #1e6cff 43.75%,
-        #00b050 50%,
-        #ffd200 75%,
-        #c00000 100%
-      );
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
-    }
-
-    .legend-labels.legend-labels-3 {
-      display: grid;
-      grid-template-columns: 1fr auto 1fr;
-      align-items: center;
-    }
-
-    .legend-labels.legend-labels-3 span {
-      font-weight: 500;
-      opacity: 0.92;
-    }
-
-    .legend-labels.legend-labels-3 #legendMin { justify-self: start; }
-    .legend-labels.legend-labels-3 .legend-mid { justify-self: center; }
-    .legend-labels.legend-labels-3 #legendMax { justify-self: end; }
-
-    .legend-extremes {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      font-size: 14px;
-      opacity: 0.9;
-    }
-
-    .leaflet-container { background: #0b1220; }
-  </style>
+  <!-- d3-contour används för isotermer (valbart lager) -->
+  <script src="https://unpkg.com/d3-array@3"></script>
+  <script src="https://unpkg.com/d3-contour@4"></script>
 </head>
 <body>
-  <div id="map"></div>
+  <a class="skip" href="#controls">Hoppa till kontroller</a>
 
-  <div class="panel">
-    <div class="title">Lufttemperatur i Sverige</div>
-    <div class="muted" id="status">Laddar…</div>
+  <div id="map" aria-label="Karta över Sverige med temperatur" role="application"></div>
 
-    <div class="legend">
-      <div class="bar"></div>
-
-      <div class="legend-labels legend-labels-3">
-        <span id="legendMin">−40°C</span>
-        <span class="legend-mid">0°C</span>
-        <span id="legendMax">+40°C</span>
+  <aside id="controls" class="panel" aria-label="Temperaturpanel">
+    <header class="panel__header">
+      <div>
+        <div class="title">Lufttemperatur i Sverige</div>
+        <div class="sub" id="status">Laddar…</div>
       </div>
 
-      <div class="legend-extremes" id="extremes">
-        <div id="highest">Högst: –</div>
-        <div id="lowest">Lägst: –</div>
-      </div>
+      <button id="panelToggle" class="panel__toggle" type="button" aria-expanded="true" aria-controls="panelBody">
+        <span class="panel__toggleIcon" aria-hidden="true">▾</span>
+        <span class="sr-only">Fäll ut / in panel</span>
+      </button>
+    </header>
 
-      <div class="muted">Klicka på en punkt för stationens namn och tid.</div>
+    <div id="panelBody" class="panel__body">
+      <section class="card" aria-label="Lager">
+        <div class="card__title">Lager</div>
+        <div class="row">
+          <label class="switch">
+            <input id="toggleField" type="checkbox" checked />
+            <span class="switch__ui" aria-hidden="true"></span>
+            <span>Temperaturfält</span>
+          </label>
+        </div>
+        <div class="row">
+          <label class="switch">
+            <input id="toggleStations" type="checkbox" checked />
+            <span class="switch__ui" aria-hidden="true"></span>
+            <span>Stationer</span>
+          </label>
+        </div>
+        <div class="row">
+          <label class="switch">
+            <input id="toggleContours" type="checkbox" />
+            <span class="switch__ui" aria-hidden="true"></span>
+            <span>Isotermer</span>
+          </label>
+        </div>
+
+        <div class="row row--split">
+          <label for="opacity">Opacitet</label>
+          <output id="opacityOut" for="opacity">72%</output>
+        </div>
+        <input id="opacity" class="range" type="range" min="0" max="100" value="72" />
+      </section>
+
+      <section class="card" aria-label="Legend">
+        <div class="card__title">Skala</div>
+        <div class="bar" aria-hidden="true"></div>
+        <div class="legend">
+          <span id="legendMin">−40°C</span>
+          <span class="legend__mid">0°C</span>
+          <span id="legendMax">+40°C</span>
+        </div>
+        <div class="extremes" id="extremes" aria-label="Extremer">
+          <div id="highest">Högst: –</div>
+          <div id="lowest">Lägst: –</div>
+        </div>
+
+        <p class="hint">
+          Fältet är interpolerat från stationsmätningar. Klicka på en station för detaljer – eller klicka på kartan för en uppskattning på platsen.
+        </p>
+      </section>
+
+      <section class="card" aria-label="Källa">
+        <div class="card__title">Källa</div>
+        <div class="meta">
+          <div><span class="dot dot--live" aria-hidden="true"></span> Uppdateras varje minut</div>
+          <div id="source">Data: –</div>
+          <div id="freshness">Aktuella stationer: –</div>
+        </div>
+      </section>
     </div>
-  </div>
+  </aside>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
   <script src="./weather.js"></script>
 </body>
 </html>
