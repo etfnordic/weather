@@ -311,27 +311,31 @@
 
       map.getPanes().overlayPane.appendChild(this._canvas);
 
-      map.on("move", this._updatePosition, this);
       map.on("moveend", this._reset, this);
       map.on("zoomend", this._reset, this);
       map.on("resize", this._reset, this);
       map.on("zoomanim", this._animateZoom, this);
+      map.on("movestart", this._invalidateSig, this);
 
       this._reset();
     }
 
     onRemove() {
-      map.off("move", this._updatePosition, this);
       map.off("moveend", this._reset, this);
       map.off("zoomend", this._reset, this);
       map.off("resize", this._reset, this);
       map.off("zoomanim", this._animateZoom, this);
+      map.off("movestart", this._invalidateSig, this);
 
       if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
       this._canvas = null;
       this._ctx = null;
       if (this._raf) cancelAnimationFrame(this._raf);
       this._raf = 0;
+    }
+
+    _invalidateSig() {
+      this._lastSig = "";
     }
 
     setOpacity(op) {
@@ -341,12 +345,6 @@
 
     redraw() {
       this._schedule(true);
-    }
-
-    _updatePosition() {
-      if (!this._canvas) return;
-      this._topLeft = map.containerPointToLayerPoint([0, 0]);
-      L.DomUtil.setPosition(this._canvas, this._topLeft);
     }
 
     _reset() {
