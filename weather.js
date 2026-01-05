@@ -305,11 +305,11 @@
       this._offCtx = this._off.getContext("2d", { willReadFrequently: false });
       this._off2Ctx = this._off2.getContext("2d", { willReadFrequently: false });
 
-      this.opacity = 0.92;
+      this.opacity = 0.70;
       this.blur1 = 10;
       this.blur2 = 18;
       this.gridStep = 6;
-      this.alpha = 0.94;
+      this.alpha = 0.80;
       this.downscale = 1.7;
 
       this._zooming = false;
@@ -593,7 +593,7 @@
     if (showMarkers) {
       if (map.hasLayer(clusterLayer)) map.removeLayer(clusterLayer);
       if (!map.hasLayer(markerLayer)) markerLayer.addTo(map);
-      tempFieldLayer.setOpacity(0.9);
+      tempFieldLayer.setOpacity(0.75);
       tempFieldLayer.gridStep = 5;
       tempFieldLayer.downscale = 1.55;
       tempFieldLayer.blur1 = 8;
@@ -601,7 +601,7 @@
     } else {
       if (map.hasLayer(markerLayer)) map.removeLayer(markerLayer);
       if (!map.hasLayer(clusterLayer)) clusterLayer.addTo(map);
-      tempFieldLayer.setOpacity(0.93);
+      tempFieldLayer.setOpacity(0.72);
       tempFieldLayer.gridStep = 6;
       tempFieldLayer.downscale = 1.8;
       tempFieldLayer.blur1 = 10;
