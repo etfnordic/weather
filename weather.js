@@ -209,23 +209,6 @@
     }
   }
 
-  function clipSwedenContainer(ctx) {
-    if (!swedenPaths) return;
-    ctx.beginPath();
-    for (const poly of swedenPaths) {
-      for (const ring of poly.rings) {
-        for (let i = 0; i < ring.length; i++) {
-          const [lng, lat] = ring[i];
-          const pt = map.latLngToContainerPoint([lat, lng]);
-          if (i === 0) ctx.moveTo(pt.x, pt.y);
-          else ctx.lineTo(pt.x, pt.y);
-        }
-        ctx.closePath();
-      }
-    }
-    ctx.clip("evenodd");
-  }
-
   let spatialBins = new Map();
   let lastPoints = [];
   let pointsVersion = 0;
@@ -299,47 +282,25 @@
       this._raf = 0;
       this._pending = false;
       this._lastSig = "";
+      this._topLeft = L.point(0, 0);
+      this._zoom = null;
 
       this._off = document.createElement("canvas");
       this._off2 = document.createElement("canvas");
       this._offCtx = this._off.getContext("2d", { willReadFrequently: false });
       this._off2Ctx = this._off2.getContext("2d", { willReadFrequently: false });
 
-      this.opacity = 0.70;
+      this.opacity = 0.72;
       this.blur1 = 10;
-      this.blur2 = 18;
+      this.blur2 = 20;
       this.gridStep = 6;
       this.alpha = 0.80;
-      this.downscale = 1.7;
-
-      this._zooming = false;
-      this._lastZoomAnim = null;
-    }
-
-    _updateCanvasPosition() {
-      if (!this._canvas) return;
-      const pos = map._getMapPanePos();
-      L.DomUtil.setPosition(this._canvas, L.point(-pos.x, -pos.y));
-    }
-
-    _applyZoomTransform(e) {
-      if (!this._canvas) return;
-      const scale = map.getZoomScale(e.zoom);
-      const offset = map._getCenterOffset(e.center)._multiplyBy(-scale).subtract(map._getMapPanePos());
-      L.DomUtil.setTransform(this._canvas, offset, scale);
-      this._zooming = true;
-      this._lastZoomAnim = { scale, offset };
-    }
-
-    _clearZoomTransform() {
-      if (!this._canvas) return;
-      this._zooming = false;
-      this._lastZoomAnim = null;
-      this._canvas.style.transform = "";
+      this.downscale = 1.8;
     }
 
     onAdd() {
       this._canvas = document.createElement("canvas");
+      this._canvas.className = "leaflet-zoom-animated";
       this._canvas.style.position = "absolute";
       this._canvas.style.top = "0";
       this._canvas.style.left = "0";
@@ -348,28 +309,21 @@
       this._ctx = this._canvas.getContext("2d", { willReadFrequently: false });
 
       map.getPanes().overlayPane.appendChild(this._canvas);
+      this._zoom = map.getZoom();
 
-      this._updateCanvasPosition();
-      map.on("move", this._updateCanvasPosition, this);
+      map.on("moveend", this._reset, this);
+      map.on("zoomend", this._reset, this);
+      map.on("resize", this._reset, this);
+      map.on("zoomanim", this._animateZoom, this);
 
-      map.on("zoomanim", this._applyZoomTransform, this);
-      map.on("zoomend", this._clearZoomTransform, this);
-
-      map.on("moveend", this._schedule, this);
-      map.on("zoomend", this._schedule, this);
-      map.on("resize", this._schedule, this);
-
-      this._schedule(true);
+      this._reset();
     }
 
     onRemove() {
-      map.off("move", this._updateCanvasPosition, this);
-      map.off("zoomanim", this._applyZoomTransform, this);
-      map.off("zoomend", this._clearZoomTransform, this);
-
-      map.off("moveend", this._schedule, this);
-      map.off("zoomend", this._schedule, this);
-      map.off("resize", this._schedule, this);
+      map.off("moveend", this._reset, this);
+      map.off("zoomend", this._reset, this);
+      map.off("resize", this._reset, this);
+      map.off("zoomanim", this._animateZoom, this);
 
       if (this._canvas && this._canvas.parentNode) this._canvas.parentNode.removeChild(this._canvas);
       this._canvas = null;
@@ -387,6 +341,41 @@
       this._schedule(true);
     }
 
+    _reset() {
+      if (!this._canvas || !this._ctx) return;
+      const size = map.getSize();
+      this._canvas.width = size.x;
+      this._canvas.height = size.y;
+      this._canvas.style.width = `${size.x}px`;
+      this._canvas.style.height = `${size.y}px`;
+      this._canvas.style.opacity = String(this.opacity);
+
+      this._topLeft = map.containerPointToLayerPoint([0, 0]);
+      L.DomUtil.setPosition(this._canvas, this._topLeft);
+
+      this._zoom = map.getZoom();
+      this._canvas.style.transform = "";
+
+      this._schedule(true);
+    }
+
+    _animateZoom(e) {
+      if (!this._canvas) return;
+
+      const scale = map.getZoomScale(e.zoom, this._zoom);
+      const viewHalf = map.getSize().multiplyBy(0.5);
+      const currentCenterPoint = map.project(map.getCenter(), e.zoom);
+      const destCenterPoint = map.project(e.center, e.zoom);
+      const centerOffset = destCenterPoint.subtract(currentCenterPoint);
+
+      const topLeftOffset = viewHalf.multiplyBy(-scale)
+        .add(L.DomUtil.getPosition(this._canvas))
+        .add(viewHalf)
+        .subtract(centerOffset);
+
+      L.DomUtil.setTransform(this._canvas, topLeftOffset, scale);
+    }
+
     _schedule(force = false) {
       if (!this._canvas || !this._ctx) return;
       if (this._raf) {
@@ -402,6 +391,25 @@
       });
     }
 
+    _clipSweden(ctx) {
+      if (!swedenPaths) return;
+      ctx.beginPath();
+      for (const poly of swedenPaths) {
+        for (const ring of poly.rings) {
+          for (let i = 0; i < ring.length; i++) {
+            const [lng, lat] = ring[i];
+            const lp = map.latLngToLayerPoint([lat, lng]);
+            const x = lp.x - this._topLeft.x;
+            const y = lp.y - this._topLeft.y;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+        }
+      }
+      ctx.clip("evenodd");
+    }
+
     _maskOffscreen(ctxOff, scaleX, scaleY) {
       if (!swedenPaths) return;
       ctxOff.globalCompositeOperation = "destination-in";
@@ -412,11 +420,11 @@
         for (const ring of poly.rings) {
           for (let i = 0; i < ring.length; i++) {
             const [lng, lat] = ring[i];
-            const pt = map.latLngToContainerPoint([lat, lng]);
-            const cx = pt.x / scaleX;
-            const cy = pt.y / scaleY;
-            if (i === 0) ctxOff.moveTo(cx, cy);
-            else ctxOff.lineTo(cx, cy);
+            const lp = map.latLngToLayerPoint([lat, lng]);
+            const x = (lp.x - this._topLeft.x) / scaleX;
+            const y = (lp.y - this._topLeft.y) / scaleY;
+            if (i === 0) ctxOff.moveTo(x, y);
+            else ctxOff.lineTo(x, y);
           }
           ctxOff.closePath();
         }
@@ -429,23 +437,14 @@
     _render(force) {
       if (!this._canvas || !this._ctx) return;
 
-      this._updateCanvasPosition();
-
-      const size = map.getSize();
-      const w = size.x;
-      const h = size.y;
+      const w = this._canvas.width;
+      const h = this._canvas.height;
 
       const b = map.getBounds();
       const z = map.getZoom();
       const sig = `${w}x${h}|z${z}|${b.getSouthWest().lat.toFixed(3)},${b.getSouthWest().lng.toFixed(3)}|v${pointsVersion}|g${this.gridStep}|d${this.downscale}|b${this.blur1},${this.blur2}`;
       if (!force && sig === this._lastSig) return;
       this._lastSig = sig;
-
-      this._canvas.width = w;
-      this._canvas.height = h;
-      this._canvas.style.width = `${w}px`;
-      this._canvas.style.height = `${h}px`;
-      this._canvas.style.opacity = String(this.opacity);
 
       const offW = Math.max(320, Math.floor(w / this.downscale));
       const offH = Math.max(320, Math.floor(h / this.downscale));
@@ -471,7 +470,9 @@
           const cx = x * scaleX;
           const cy = y * scaleY;
 
-          const ll = map.containerPointToLatLng([cx, cy]);
+          const lp = L.point(this._topLeft.x + cx, this._topLeft.y + cy);
+          const ll = map.layerPointToLatLng(lp);
+
           const t = idwTemp(ll.lat, ll.lng);
           if (t === null) continue;
 
@@ -500,14 +501,13 @@
       ctxOff2.clearRect(0, 0, offW, offH);
       ctxOff2.drawImage(this._off, 0, 0, offW, offH);
       ctxOff2.filter = "none";
-
       this._maskOffscreen(ctxOff2, scaleX, scaleY);
 
       const ctx = this._ctx;
       ctx.clearRect(0, 0, w, h);
 
       ctx.save();
-      clipSwedenContainer(ctx);
+      this._clipSweden(ctx);
 
       ctx.imageSmoothingEnabled = true;
 
@@ -520,10 +520,6 @@
       ctx.globalAlpha = 1;
 
       ctx.restore();
-
-      if (this._zooming && this._lastZoomAnim) {
-        L.DomUtil.setTransform(this._canvas, this._lastZoomAnim.offset, this._lastZoomAnim.scale);
-      }
     }
   }
 
