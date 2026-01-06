@@ -351,6 +351,10 @@
   // -----------------------------
   // Temperature field canvas layer
   // -----------------------------
+  // ---------------------------------
+  // Färgade isotermer ("filled contours")
+  // Ritar temperaturzoner mellan isotermer i canvas och klipper till Sverige.
+  // ---------------------------------
   class TempFieldCanvasLayer extends L.Layer {
     constructor() {
       super();
@@ -363,10 +367,11 @@
       this._layerTopLeft = L.point(0, 0);
 
       this.opacity = 0.72;
-      this.gridStep = 6;
-      this.alpha = 0.80;
-      this.downscale = 1.8;
-      this.blur = 14;
+      // Lägre upplösning + lätt blur ger snygga zoner utan att bli tungt.
+      this.gridStep = 8;
+      this.alpha = 1.0;
+      this.downscale = 1.5;
+      this.blur = 1.25;
 
       this._off = document.createElement("canvas");
       this._offCtx = this._off.getContext("2d", { willReadFrequently: false });
@@ -659,34 +664,75 @@
 
       const ctxOff = this._offCtx;
       ctxOff.clearRect(0, 0, offW, offH);
-      const img = ctxOff.createImageData(offW, offH);
-      const data = img.data;
 
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          const t = temps[r * cols + c];
-          if (!Number.isFinite(t)) continue;
-          const tt = clamp(t, TEMP_MIN, TEMP_MAX);
-          const { r: R, g: G, b: B } = hexToRgb(colorForTemp(tt));
+      // --- Färgade isotermer (filled contours) ---
+      // Vi använder d3-contour på samma IDW-grid som tidigare raster.
+      // Resultatet blir zoner där varje "tröskel" (t.ex. -10, -8, ...)
+      // fylls med sin temperaturfärg. Högre trösklar ritas sist och hamnar överst.
+      if (typeof d3 !== "undefined" && d3.contours) {
+        const thresholds = [];
+        for (let t = TEMP_MIN; t <= TEMP_MAX; t += 2) thresholds.push(t);
 
-          const x0 = c * step;
-          const y0 = r * step;
-          for (let yy = 0; yy < step; yy++) {
-            for (let xx = 0; xx < step; xx++) {
-              const x = x0 + xx;
-              const y = y0 + yy;
-              if (x >= offW || y >= offH) continue;
-              const idx = (y * offW + x) * 4;
-              data[idx] = R;
-              data[idx + 1] = G;
-              data[idx + 2] = B;
-              data[idx + 3] = Math.round(255 * this.alpha);
+        // d3 vill ha en vanlig array (inte Float32Array) och NaN för saknade värden.
+        const vals = Array.from(temps, (v) => (Number.isFinite(v) ? clamp(v, TEMP_MIN, TEMP_MAX) : NaN));
+        const contours = d3.contours().size([cols, rows]).thresholds(thresholds)(vals);
+
+        ctxOff.save();
+        ctxOff.globalAlpha = this.alpha;
+        ctxOff.imageSmoothingEnabled = true;
+
+        for (const c of contours) {
+          if (!Number.isFinite(c.value)) continue;
+          const fill = colorForTemp(clamp(c.value, TEMP_MIN, TEMP_MAX));
+          ctxOff.fillStyle = fill;
+          ctxOff.beginPath();
+          for (const poly of c.coordinates) {
+            for (const ring of poly) {
+              for (let i = 0; i < ring.length; i++) {
+                const gx = ring[i][0];
+                const gy = ring[i][1];
+                const x = gx * step;
+                const y = gy * step;
+                if (i === 0) ctxOff.moveTo(x, y);
+                else ctxOff.lineTo(x, y);
+              }
+              ctxOff.closePath();
+            }
+          }
+          ctxOff.fill("evenodd");
+        }
+
+        ctxOff.restore();
+      } else {
+        // Fallback: gammal pixelraster om d3 saknas.
+        const img = ctxOff.createImageData(offW, offH);
+        const data = img.data;
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const t = temps[r * cols + c];
+            if (!Number.isFinite(t)) continue;
+            const tt = clamp(t, TEMP_MIN, TEMP_MAX);
+            const { r: R, g: G, b: B } = hexToRgb(colorForTemp(tt));
+
+            const x0 = c * step;
+            const y0 = r * step;
+            for (let yy = 0; yy < step; yy++) {
+              for (let xx = 0; xx < step; xx++) {
+                const x = x0 + xx;
+                const y = y0 + yy;
+                if (x >= offW || y >= offH) continue;
+                const idx = (y * offW + x) * 4;
+                data[idx] = R;
+                data[idx + 1] = G;
+                data[idx + 2] = B;
+                data[idx + 3] = Math.round(255 * this.alpha);
+              }
             }
           }
         }
+        ctxOff.putImageData(img, 0, 0);
       }
 
-      ctxOff.putImageData(img, 0, 0);
       const scaleX = map.getSize().x / offW;
       const scaleY = map.getSize().y / offH;
       this._maskOffscreen(ctxOff, scaleX, scaleY);
@@ -700,12 +746,9 @@
       ctx.save();
       this._clipSweden(ctx);
       ctx.imageSmoothingEnabled = true;
-      ctx.filter = `blur(${this.blur}px)`;
+      ctx.filter = this.blur > 0 ? `blur(${this.blur}px)` : "none";
       ctx.drawImage(this._off, 0, 0, offW, offH, 0, 0, w, h);
       ctx.filter = "none";
-      ctx.globalAlpha = 0.92;
-      ctx.drawImage(this._off, 0, 0, offW, offH, 0, 0, w, h);
-      ctx.globalAlpha = 1;
       ctx.restore();
 
       // om isotermer är på: trigga uppdatering (throttlad)
