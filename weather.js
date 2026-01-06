@@ -49,7 +49,7 @@
 
   if (legendMinEl) legendMinEl.textContent = `${TEMP_MIN}°C`;
   if (legendMaxEl) legendMaxEl.textContent = `${TEMP_MAX > 0 ? "+" : ""}${TEMP_MAX}°C`;
-  if (sourceEl) sourceEl.textContent = "Data: Observationsstationer (SMHI/aggregat)";
+  if (sourceEl) sourceEl.textContent = "Data: Observationsstationer (Trafikverket)";
 
   // Panel collapse (bra på mobil)
   panelToggle?.addEventListener("click", () => {
